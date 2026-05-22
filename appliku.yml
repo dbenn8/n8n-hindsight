@@ -1,0 +1,50 @@
+build_settings:
+  build_image: "dockerfile"
+  container_port: 8889
+  expose_web_port: true
+  environment_variables:
+    - name: HINDSIGHT_API_DATABASE_URL
+      from_database:
+        name: db
+        property: private_connection_url
+    - name: HINDSIGHT_API_HOST
+      value: "0.0.0.0"
+    - name: HINDSIGHT_API_PORT
+      value: "8889"
+    # LLM: GreenPT (OpenAI-compatible, privacy-focused, EU-based)
+    - name: HINDSIGHT_API_LLM_PROVIDER
+      value: "openai"
+    - name: HINDSIGHT_API_LLM_BASE_URL
+      value: "https://api.greenpt.ai/v1"
+    - name: HINDSIGHT_API_LLM_MODEL
+      value: "mistral-small-3.2-24b-instruct-2506"
+    - name: HINDSIGHT_API_LLM_API_KEY
+      source: manual
+    # Embeddings: local in-container model (no external API)
+    - name: HINDSIGHT_API_EMBEDDINGS_PROVIDER
+      value: "local"
+    - name: HINDSIGHT_API_RERANKER_PROVIDER
+      value: "rrf"
+    - name: HINDSIGHT_API_VECTOR_EXTENSION
+      value: "pgvector"
+    - name: HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS
+      value: "4096"
+    - name: HINDSIGHT_API_CONSOLIDATION_LLM_BATCH_SIZE
+      value: "25"
+    - name: HINDSIGHT_API_MCP_ENABLED
+      value: "true"
+    # Restrict MCP to recall only — public read-only instance
+    - name: HINDSIGHT_API_MCP_ENABLED_TOOLS
+      value: "recall,list_banks,get_bank,get_bank_stats,list_tags"
+    - name: HINDSIGHT_API_TENANT_EXTENSION
+      value: "hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension"
+    - name: HINDSIGHT_API_TENANT_API_KEY
+      source: manual
+
+databases:
+  db:
+    type: postgresql_16_pgvector
+
+services:
+  web:
+    command: "python -m hindsight_api"
