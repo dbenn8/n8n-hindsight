@@ -1,6 +1,6 @@
 build_settings:
   build_image: "dockerfile"
-  container_port: 8889
+  container_port: 8888
   expose_web_port: true
   environment_variables:
     - name: HINDSIGHT_API_DATABASE_URL
@@ -40,6 +40,12 @@ build_settings:
       value: "hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension"
     - name: HINDSIGHT_API_TENANT_API_KEY
       source: manual
+    - name: HINDSIGHT_CP_DATAPLANE_API_URL
+      value: "http://127.0.0.1:8889"
+    - name: HINDSIGHT_CP_DATAPLANE_API_KEY
+      value: "${HINDSIGHT_API_TENANT_API_KEY}"
+    - name: HINDSIGHT_CP_ACCESS_KEY
+      source: manual
 
 databases:
   db:
@@ -47,4 +53,4 @@ databases:
 
 services:
   web:
-    command: "python -m hindsight_api"
+    command: "supervisord -c /etc/supervisord.conf"
