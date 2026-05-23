@@ -50,7 +50,7 @@ build_settings:
     - name: GITHUB_TOKEN
       source: manual
     - name: HINDSIGHT_URL
-      value: "http://127.0.0.1:8889"
+      value: "http://n8nhindsight_web:8888"
     - name: SYNC_STATE_FILE
       value: "/data/sync-state.json"
 
