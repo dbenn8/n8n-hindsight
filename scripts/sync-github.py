@@ -10,21 +10,27 @@ Usage:
     python3 sync-github.py --full           # ignore state, fetch everything
     python3 sync-github.py --dry-run        # fetch and filter but don't retain
 
-State file: ~/.n8n-hindsight-sync-state.json
+Env vars:
+    GITHUB_TOKEN              — GitHub personal access token (optional but recommended for rate limits)
+    HINDSIGHT_URL             — Hindsight API URL (default: http://127.0.0.1:8889 for in-container, or public URL)
+    HINDSIGHT_API_TENANT_API_KEY — Hindsight API key
+    SYNC_STATE_FILE           — path to state file (default: /data/sync-state.json)
 """
 import asyncio
-import aiohttp
 import json
-import subprocess
-import sys
 import os
+import sys
+import urllib.request
+import urllib.parse
 from datetime import datetime, timezone
 
-HINDSIGHT_URL = "https://n8nhindsight.applikuapp.com"
-HINDSIGHT_KEY = "4afd972990864781a845a5b17084b8ce75f2d5d2cab15a057d006a2ca0d18b8e"
-BANK_ID = "n8n"
 REPO = "n8n-io/n8n"
-STATE_FILE = os.path.expanduser("~/.n8n-hindsight-sync-state.json")
+BANK_ID = "n8n"
+
+HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://127.0.0.1:8889")
+HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+STATE_FILE = os.environ.get("SYNC_STATE_FILE", "/data/sync-state.json")
 
 HIGH_SIGNAL_LABELS = {"bug", "feature", "community", "Help Wanted", "type:bug", "type:enhancement", "bug-report"}
 
@@ -37,52 +43,67 @@ def load_state():
 
 
 def save_state(state):
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
 
+def github_api(path, params=None):
+    """Call GitHub REST API with pagination."""
+    headers = {"Accept": "application/vnd.github+json"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+
+    results = []
+    url = f"https://api.github.com/{path}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+
+    while url:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+            if isinstance(data, list):
+                results.extend(data)
+            else:
+                results.append(data)
+
+            link = resp.headers.get("Link", "")
+            url = None
+            for part in link.split(","):
+                if 'rel="next"' in part:
+                    url = part.split("<")[1].split(">")[0]
+                    break
+
+    return results
+
+
 def fetch_issues(since=None):
-    """Fetch open issues updated since timestamp."""
+    """Fetch open issues (not PRs) updated since timestamp."""
     print(f"Fetching issues{f' since {since}' if since else ' (full)'}...")
-    cmd = [
-        "gh", "api", f"repos/{REPO}/issues",
-        "--paginate",
-        "-q", '.[] | select(.pull_request == null) | {number, title, body: (.body // "" | .[0:4000]), labels: [.labels[].name], comments: .comments, url: .html_url, created_at: .created_at, updated_at: .updated_at}',
-    ]
+    params = {"state": "open", "per_page": "100", "sort": "updated", "direction": "asc"}
     if since:
-        cmd[3] = f"repos/{REPO}/issues?state=open&since={since}&sort=updated&direction=asc"
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    issues = []
-    for line in result.stdout.strip().split("\n"):
-        if line.strip():
-            try:
-                issues.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+        params["since"] = since
+
+    all_items = github_api(f"repos/{REPO}/issues", params)
+    issues = [i for i in all_items if "pull_request" not in i]
     print(f"  Fetched {len(issues)} issues")
     return issues
 
 
 def fetch_prs(since=None):
-    """Fetch open PRs updated since timestamp."""
+    """Fetch open PRs with descriptions updated since timestamp."""
     print(f"Fetching PRs{f' since {since}' if since else ' (full)'}...")
-    # GitHub PRs API doesn't support 'since', so we fetch all and filter client-side
-    cmd = [
-        "gh", "api", f"repos/{REPO}/pulls?state=open&sort=updated&direction=desc",
-        "--paginate",
-        "-q", '.[] | select(.body != null and .body != "") | {number, title, body: (.body // "" | .[0:4000]), labels: [.labels[].name], comments: .comments, url: .html_url, created_at: .created_at, updated_at: .updated_at}',
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    params = {"state": "open", "per_page": "100", "sort": "updated", "direction": "desc"}
+
+    all_prs = github_api(f"repos/{REPO}/pulls", params)
     prs = []
-    for line in result.stdout.strip().split("\n"):
-        if line.strip():
-            try:
-                item = json.loads(line)
-                if since and item.get("updated_at", "") <= since:
-                    continue
-                prs.append(item)
-            except json.JSONDecodeError:
-                continue
+    for pr in all_prs:
+        if not pr.get("body"):
+            continue
+        if since and pr.get("updated_at", "") <= since:
+            continue
+        prs.append(pr)
     print(f"  Fetched {len(prs)} PRs")
     return prs
 
@@ -90,7 +111,7 @@ def fetch_prs(since=None):
 def filter_high_signal(items, min_comments=2):
     filtered = []
     for item in items:
-        labels = set(item.get("labels", []))
+        labels = {l["name"] for l in item.get("labels", [])}
         comments = item.get("comments") or 0
         if labels & HIGH_SIGNAL_LABELS or comments >= min_comments:
             filtered.append(item)
@@ -100,9 +121,9 @@ def filter_high_signal(items, min_comments=2):
 def format_item(item, item_type):
     number = item["number"]
     title = item["title"]
-    body = item.get("body", "")
-    url = item["url"]
-    labels = item.get("labels", [])
+    body = (item.get("body") or "")[:4000]
+    url = item["html_url"]
+    labels = [l["name"] for l in item.get("labels", [])]
     created = item.get("created_at", "")
 
     content = f"GitHub {item_type} #{number}: {title}\n\n{body}".strip()
@@ -110,7 +131,6 @@ def format_item(item, item_type):
         content = content[:5000] + "..."
 
     context = f"github {item_type} #{number} - {title} ({url})"
-
     tags = [f"type:github-{item_type}", "source:github"]
     for label in labels:
         tags.append(f"label:{label}")
@@ -123,56 +143,55 @@ def format_item(item, item_type):
     }
 
 
-async def retain_batch(session, items):
-    payload = {"items": items, "async": True}
+def retain_batch(items):
+    """Retain a batch of items to Hindsight via urllib (no aiohttp dependency)."""
+    payload = json.dumps({"items": items, "async": True}).encode()
     headers = {
         "Authorization": f"Bearer {HINDSIGHT_KEY}",
         "Content-Type": "application/json",
     }
+    req = urllib.request.Request(
+        f"{HINDSIGHT_URL}/v1/default/banks/{BANK_ID}/memories",
+        data=payload,
+        headers=headers,
+        method="POST",
+    )
     try:
-        async with session.post(
-            f"{HINDSIGHT_URL}/v1/default/banks/{BANK_ID}/memories",
-            json=payload,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=120),
-        ) as resp:
-            if resp.status in (200, 201, 202):
-                return True
-            else:
-                text = await resp.text()
-                print(f"  FAIL ({resp.status}): {text[:100]}", file=sys.stderr)
-                return False
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return resp.status in (200, 201, 202)
     except Exception as e:
-        print(f"  ERROR: {e}", file=sys.stderr)
+        print(f"  RETAIN ERROR: {e}", file=sys.stderr)
         return False
 
 
-async def ingest(formatted_items):
+def ingest(formatted_items):
     batch_size = 5
     success = 0
     failed = 0
 
-    async with aiohttp.ClientSession() as session:
-        for i in range(0, len(formatted_items), batch_size):
-            batch = formatted_items[i:i + batch_size]
-            ok = await retain_batch(session, batch)
-            if ok:
-                success += len(batch)
-            else:
-                failed += len(batch)
-            if (success + failed) % 50 == 0 or (success + failed) == len(formatted_items):
-                print(f"  [{success + failed}/{len(formatted_items)}] {success} ok, {failed} failed")
+    for i in range(0, len(formatted_items), batch_size):
+        batch = formatted_items[i:i + batch_size]
+        ok = retain_batch(batch)
+        if ok:
+            success += len(batch)
+        else:
+            failed += len(batch)
+        if (success + failed) % 50 == 0 or (success + failed) == len(formatted_items):
+            print(f"  [{success + failed}/{len(formatted_items)}] {success} ok, {failed} failed")
 
     return success, failed
 
 
-async def main():
+def main():
     full_run = "--full" in sys.argv
     dry_run = "--dry-run" in sys.argv
 
+    if not HINDSIGHT_KEY:
+        print("ERROR: HINDSIGHT_API_TENANT_API_KEY not set", file=sys.stderr)
+        sys.exit(1)
+
     state = load_state()
     since = None if full_run else state.get("last_sync")
-
     sync_start = datetime.now(timezone.utc).isoformat()
 
     # Fetch
@@ -209,9 +228,8 @@ async def main():
 
     # Ingest
     print("\nIngesting into Hindsight...")
-    success, failed = await ingest(formatted)
+    success, failed = ingest(formatted)
 
-    # Update state only on success
     if failed == 0:
         state["last_sync"] = sync_start
         state["last_run"] = sync_start
@@ -226,4 +244,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

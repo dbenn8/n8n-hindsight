@@ -46,6 +46,13 @@ build_settings:
       value: "${HINDSIGHT_API_TENANT_API_KEY}"
     - name: HINDSIGHT_CP_ACCESS_KEY
       source: manual
+    # GitHub sync cronjob
+    - name: GITHUB_TOKEN
+      source: manual
+    - name: HINDSIGHT_URL
+      value: "http://127.0.0.1:8889"
+    - name: SYNC_STATE_FILE
+      value: "/data/sync-state.json"
 
 databases:
   db:
@@ -54,3 +61,12 @@ databases:
 services:
   web:
     command: "supervisord -c /etc/supervisord.conf"
+
+cronjobs:
+  github-sync:
+    command: "python3 /app/scripts/sync-github.py"
+    schedule: "0 3 * * *"
+
+volumes:
+  sync-data:
+    target: "/data"

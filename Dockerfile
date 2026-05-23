@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY supervisord.conf /etc/supervisord.conf
+COPY scripts/ /app/scripts/
 
 RUN mkdir -p /var/log/nginx /var/lib/nginx /run && chown -R hindsight:hindsight /var/log/nginx /var/lib/nginx /run
 
