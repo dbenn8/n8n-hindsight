@@ -11,13 +11,13 @@ build_settings:
       value: "0.0.0.0"
     - name: HINDSIGHT_API_PORT
       value: "8889"
-    # LLM for consolidation — OpenRouter GLM-4-32b (~$4 for 70K memories)
+    # LLM for consolidation — DeepSeek V3 (~$5 for 70K memories, 300 RPM)
     - name: HINDSIGHT_API_LLM_PROVIDER
       value: "openai"
     - name: HINDSIGHT_API_LLM_BASE_URL
-      value: "https://openrouter.ai/api/v1"
+      value: "https://api.deepseek.com"
     - name: HINDSIGHT_API_LLM_MODEL
-      value: "z-ai/glm-4-32b"
+      value: "deepseek-chat"
     - name: HINDSIGHT_API_LLM_API_KEY
       source: manual
     # Consolidation workers — increase to process 68K backlog faster
