@@ -23,11 +23,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get purge -y npm && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
-COPY nginx.conf /etc/nginx/nginx.conf
+COPY nginx.conf /etc/nginx/nginx.conf.template
+COPY start-nginx.sh /usr/local/bin/start-nginx.sh
 COPY supervisord.conf /etc/supervisord.conf
 COPY scripts/ /app/scripts/
 
-RUN mkdir -p /var/log/nginx /var/lib/nginx /run && chown -R hindsight:hindsight /var/log/nginx /var/lib/nginx /run
+RUN chmod +x /usr/local/bin/start-nginx.sh \
+    && mkdir -p /var/log/nginx /var/lib/nginx /run \
+    && chown -R hindsight:hindsight /var/log/nginx /var/lib/nginx /run /etc/nginx
 
 USER hindsight
 
