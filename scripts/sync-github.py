@@ -32,8 +32,6 @@ HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STATE_FILE = os.environ.get("SYNC_STATE_FILE", "/data/sync-state.json")
 
-HIGH_SIGNAL_LABELS = {"bug", "feature", "community", "Help Wanted", "type:bug", "type:enhancement", "bug-report"}
-
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -91,6 +89,52 @@ def fetch_issues(since=None):
     return issues
 
 
+def fetch_issues_by_state(state, since=None):
+    """Fetch issues by state, optionally filtered by since timestamp."""
+    print(f"Fetching {state} issues{f' since {since}' if since else ''}...")
+    params = {"state": state, "per_page": "100", "sort": "updated", "direction": "desc"}
+    if since:
+        params["since"] = since
+    all_items = github_api(f"repos/{REPO}/issues", params)
+    issues = [i for i in all_items if "pull_request" not in i]
+    print(f"  Fetched {len(issues)} {state} issues")
+    return issues
+
+
+def fetch_closed_issues(target_total, open_count):
+    """Fetch newest closed issues until we reach target_total combined with open."""
+    remaining = target_total - open_count
+    if remaining <= 0:
+        return []
+    print(f"Fetching up to {remaining} closed issues...")
+    headers = {"Accept": "application/vnd.github+json"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    all_items = []
+    page = 1
+    while len(all_items) < remaining:
+        params = urllib.parse.urlencode({
+            "state": "closed", "per_page": "100",
+            "sort": "updated", "direction": "desc", "page": str(page),
+        })
+        url = f"https://api.github.com/repos/{REPO}/issues?{params}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            batch = json.loads(resp.read())
+        issues = [i for i in batch if "pull_request" not in i]
+        if not issues:
+            break
+        all_items.extend(issues)
+        if len(batch) < 100:
+            break
+        page += 1
+        if page % 10 == 0:
+            print(f"  ...{len(all_items)} closed issues so far (page {page})")
+    result = all_items[:remaining]
+    print(f"  Fetched {len(result)} closed issues")
+    return result
+
+
 def fetch_prs(since=None):
     """Fetch open PRs with descriptions updated since timestamp."""
     print(f"Fetching PRs{f' since {since}' if since else ' (full)'}...")
@@ -108,16 +152,6 @@ def fetch_prs(since=None):
     return prs
 
 
-def filter_high_signal(items, min_comments=2):
-    filtered = []
-    for item in items:
-        labels = {l["name"] for l in item.get("labels", [])}
-        comments = item.get("comments") or 0
-        if labels & HIGH_SIGNAL_LABELS or comments >= min_comments:
-            filtered.append(item)
-    return filtered
-
-
 def format_item(item, item_type):
     number = item["number"]
     title = item["title"]
@@ -125,6 +159,8 @@ def format_item(item, item_type):
     url = item["html_url"]
     labels = [l["name"] for l in item.get("labels", [])]
     created = item.get("created_at", "")
+    reactions = item.get("reactions", {})
+    state = item.get("state", "open")
 
     content = f"GitHub {item_type} #{number}: {title}\n\n{body}".strip()
     if len(content) > 5000:
@@ -134,12 +170,29 @@ def format_item(item, item_type):
     tags = [f"type:github-{item_type}", "source:github"]
     for label in labels:
         tags.append(f"label:{label}")
+    if state == "closed":
+        tags.append("state:closed")
+
+    metadata = {
+        "url": url,
+        "number": str(number),
+        "created_at": created,
+        "reactions_total": str(reactions.get("total_count", 0)),
+        "of_those_plus1": str(reactions.get("+1", 0)),
+        "comments": str(item.get("comments", 0)),
+        "state": state,
+        "author_association": item.get("author_association", "NONE"),
+    }
+    if item.get("state_reason"):
+        metadata["state_reason"] = item["state_reason"]
+    if item.get("closed_at"):
+        metadata["closed_at"] = item["closed_at"]
 
     return {
         "content": content,
         "context": context,
         "tags": tags,
-        "metadata": {"url": url, "number": str(number), "created_at": created},
+        "metadata": metadata,
     }
 
 
@@ -195,21 +248,23 @@ def main():
     sync_start = datetime.now(timezone.utc).isoformat()
 
     # Fetch
+    TARGET_TOTAL = 4500
     issues = fetch_issues(since)
+    if since:
+        recently_closed = fetch_issues_by_state("closed", since)
+        closed_issues = recently_closed
+    else:
+        closed_issues = fetch_closed_issues(TARGET_TOTAL, len(issues))
     prs = fetch_prs(since)
 
-    # Filter
-    high_signal_issues = filter_high_signal(issues)
-    high_signal_prs = filter_high_signal(prs, min_comments=1)
+    all_issues = issues + closed_issues
+    print(f"\nTotal: {len(issues)} open + {len(closed_issues)} closed issues, {len(prs)} PRs")
 
-    print(f"\nHigh-signal: {len(high_signal_issues)} issues, {len(high_signal_prs)} PRs")
-    print(f"Filtered out: {len(issues) - len(high_signal_issues)} issues, {len(prs) - len(high_signal_prs)} PRs")
-
-    # Format
+    # Format (no filtering — ingest everything, let consolidation handle it)
     formatted = []
-    for issue in high_signal_issues:
+    for issue in all_issues:
         formatted.append(format_item(issue, "issue"))
-    for pr in high_signal_prs:
+    for pr in prs:
         formatted.append(format_item(pr, "pr"))
 
     print(f"Total to ingest: {len(formatted)}")
