@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir \
 
 # Node.js + npm (for Control Plane) + nginx (for routing)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    nodejs npm nginx \
+    nodejs npm nginx gettext-base \
     && npm install -g @vectorize-io/hindsight-control-plane@0.6.2 \
     && apt-get purge -y npm && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /root/.npm
