@@ -121,9 +121,9 @@ def fetch_closed_issues(target_total, open_count):
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=30) as resp:
             batch = json.loads(resp.read())
-        issues = [i for i in batch if "pull_request" not in i]
-        if not issues:
+        if not batch:
             break
+        issues = [i for i in batch if "pull_request" not in i]
         all_items.extend(issues)
         if len(batch) < 100:
             break
