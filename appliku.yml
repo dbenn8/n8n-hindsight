@@ -73,6 +73,12 @@ cronjobs:
   github-sync:
     command: "python3 /app/scripts/sync-github.py"
     schedule: "0 3 * * *"
+  docs-sync:
+    command: "python3 /app/scripts/sync-docs.py"
+    schedule: "30 3 * * *"
+  community-sync:
+    command: "python3 /app/scripts/sync-community.py"
+    schedule: "0 4 * * *"
 
 volumes:
   sync-data:
