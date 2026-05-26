@@ -22,7 +22,7 @@ build_settings:
       source: manual
     # Consolidation workers — increase to process 68K backlog faster
     - name: HINDSIGHT_API_WORKER_CONSOLIDATION_MAX_SLOTS
-      value: "8"
+      value: "6"
     - name: HINDSIGHT_API_CONSOLIDATION_MAX_MEMORIES_PER_ROUND
       value: "500"
     - name: HINDSIGHT_API_CONSOLIDATION_BATCH_SIZE
