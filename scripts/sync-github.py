@@ -102,7 +102,8 @@ def fetch_issues_by_state(state, since=None):
 
 
 def fetch_closed_issues(target_total, open_count):
-    """Fetch newest closed issues until we reach target_total combined with open."""
+    """Fetch newest closed issues page-by-page, following cursor-based
+    pagination via Link headers. Stops when we have enough issues."""
     remaining = target_total - open_count
     if remaining <= 0:
         return []
@@ -110,28 +111,42 @@ def fetch_closed_issues(target_total, open_count):
     headers = {"Accept": "application/vnd.github+json"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
-    all_items = []
-    page = 1
-    while len(all_items) < remaining:
-        params = urllib.parse.urlencode({
-            "state": "closed", "per_page": "100",
-            "sort": "updated", "direction": "desc", "page": str(page),
-        })
-        url = f"https://api.github.com/repos/{REPO}/issues?{params}"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            batch = json.loads(resp.read())
-        if not batch:
-            break
-        issues = [i for i in batch if "pull_request" not in i]
-        all_items.extend(issues)
-        if len(batch) < 100:
-            break
-        page += 1
-        if page % 10 == 0:
-            print(f"  ...{len(all_items)} closed issues so far (page {page})")
-    result = all_items[:remaining]
-    print(f"  Fetched {len(result)} closed issues")
+    issues = []
+    url = f"https://api.github.com/repos/{REPO}/issues?" + urllib.parse.urlencode({
+        "state": "closed", "per_page": "100", "sort": "updated", "direction": "desc",
+    })
+    pages = 0
+    while url and len(issues) < remaining:
+        batch = None
+        link = ""
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    batch = json.loads(resp.read())
+                    link = resp.headers.get("Link", "")
+                break
+            except Exception as e:
+                if attempt < 2:
+                    import time
+                    time.sleep(2)
+                    print(f"  Retry {attempt + 1} for page {pages + 1}: {e}")
+                else:
+                    print(f"  Failed after 3 attempts on page {pages + 1}: {e}")
+                    return issues[:remaining]
+        pages += 1
+        for item in batch:
+            if "pull_request" not in item:
+                issues.append(item)
+        url = None
+        for part in link.split(","):
+            if 'rel="next"' in part:
+                url = part.split("<")[1].split(">")[0]
+                break
+        if pages % 20 == 0:
+            print(f"  ...{len(issues)} closed issues so far (page {pages})")
+    result = issues[:remaining]
+    print(f"  Fetched {len(result)} closed issues ({pages} pages)")
     return result
 
 
