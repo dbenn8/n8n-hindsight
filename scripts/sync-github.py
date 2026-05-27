@@ -170,7 +170,7 @@ def fetch_prs(since=None):
 def format_item(item, item_type):
     number = item["number"]
     title = item["title"]
-    body = (item.get("body") or "")[:4000]
+    body = item.get("body") or ""
     url = item["html_url"]
     labels = [l["name"] for l in item.get("labels", [])]
     created = item.get("created_at", "")
@@ -178,8 +178,6 @@ def format_item(item, item_type):
     state = item.get("state", "open")
 
     content = f"GitHub {item_type} #{number}: {title}\n\n{body}".strip()
-    if len(content) > 5000:
-        content = content[:5000] + "..."
 
     context = f"github {item_type} #{number} - {title} ({url})"
     tags = [f"type:github-{item_type}", "source:github"]
