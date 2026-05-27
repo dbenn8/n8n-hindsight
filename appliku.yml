@@ -38,6 +38,8 @@ build_settings:
       value: "4096"
     - name: HINDSIGHT_API_CONSOLIDATION_LLM_BATCH_SIZE
       value: "25"
+    - name: HINDSIGHT_API_WORKER_ID
+      value: "n8nhindsight-worker-1"
     - name: HINDSIGHT_API_MCP_ENABLED
       value: "true"
     # Restrict MCP to recall only — public read-only instance

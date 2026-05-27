@@ -248,13 +248,30 @@ def ingest(formatted_items):
     return success, failed
 
 
+def load_exclude_set(path):
+    """Load a JSON file of issue/PR numbers to skip. Expects {"issues": [...], "prs": [...]}."""
+    if not path or not os.path.exists(path):
+        return set(), set()
+    with open(path) as f:
+        data = json.load(f)
+    return set(data.get("issues", [])), set(data.get("prs", []))
+
+
 def main():
     full_run = "--full" in sys.argv
     dry_run = "--dry-run" in sys.argv
+    exclude_file = None
+    if "--exclude-file" in sys.argv:
+        idx = sys.argv.index("--exclude-file")
+        exclude_file = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
 
     if not HINDSIGHT_KEY:
         print("ERROR: HINDSIGHT_API_TENANT_API_KEY not set", file=sys.stderr)
         sys.exit(1)
+
+    exclude_issues, exclude_prs = load_exclude_set(exclude_file)
+    if exclude_issues or exclude_prs:
+        print(f"Excluding {len(exclude_issues)} issues + {len(exclude_prs)} PRs from retain")
 
     state = load_state()
     since = None if full_run else state.get("last_sync")
@@ -273,13 +290,22 @@ def main():
     all_issues = issues + closed_issues
     print(f"\nTotal: {len(issues)} open + {len(closed_issues)} closed issues, {len(prs)} PRs")
 
-    # Format (no filtering — ingest everything, let consolidation handle it)
+    # Format, skipping excluded numbers
     formatted = []
+    skipped = 0
     for issue in all_issues:
+        if issue["number"] in exclude_issues:
+            skipped += 1
+            continue
         formatted.append(format_item(issue, "issue"))
     for pr in prs:
+        if pr["number"] in exclude_prs:
+            skipped += 1
+            continue
         formatted.append(format_item(pr, "pr"))
 
+    if skipped:
+        print(f"Skipped (in exclude list): {skipped}")
     print(f"Total to ingest: {len(formatted)}")
 
     if dry_run:
