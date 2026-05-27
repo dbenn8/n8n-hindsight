@@ -79,6 +79,9 @@ cronjobs:
   community-sync:
     command: "python3 /app/scripts/sync-community.py"
     schedule: "0 4 * * *"
+  releases-sync:
+    command: "python3 /app/scripts/sync-releases.py"
+    schedule: "30 4 * * *"
 
 volumes:
   sync-data:

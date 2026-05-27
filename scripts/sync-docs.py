@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
 """
-Incremental sync of n8n official documentation to Hindsight.
-Clones/pulls the n8n-docs repo and re-ingests changed markdown files.
+Sync n8n official documentation to Hindsight via GitHub API.
+No local clone needed — fetches file list and content directly from GitHub.
+
+Usage:
+    python3 sync-docs.py                  # incremental (only changed files)
+    python3 sync-docs.py --full           # re-ingest all docs
+    python3 sync-docs.py --dry-run        # show what would be synced
+    python3 sync-docs.py --test N         # sync only N files (for testing)
 
 State tracked in SYNC_STATE_FILE (default: /data/sync-docs-state.json).
 """
+import base64
 import json
 import os
-import re
-import subprocess
 import sys
 import time
 import urllib.request
 
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://127.0.0.1:8889")
 HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 BANK_ID = "n8n"
-REPO_URL = "https://github.com/n8n-io/n8n-docs.git"
-CLONE_DIR = "/tmp/n8n-docs-source"
+REPO = "n8n-io/n8n-docs"
 STATE_FILE = os.environ.get("SYNC_DOCS_STATE_FILE", "/data/sync-docs-state.json")
 
 SKIP_DIRS = {"_extra", "_images", "_includes", "_macros", "_video", "_workflows", "integrations"}
+SKIP_FILES = {"docs/release-notes.md", "docs/release-notes/1-x.md"}
+DOCS_BASE_URL = "https://docs.n8n.io"
 
 
 def load_state():
@@ -36,65 +43,79 @@ def save_state(state):
         json.dump(state, f, indent=2)
 
 
-def clone_or_pull():
-    if os.path.exists(os.path.join(CLONE_DIR, ".git")):
-        subprocess.run(["git", "-C", CLONE_DIR, "pull", "--depth=1"], capture_output=True)
-    else:
-        subprocess.run(["git", "clone", "--depth=1", REPO_URL, CLONE_DIR], capture_output=True, timeout=300)
-    sha = subprocess.run(["git", "-C", CLONE_DIR, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    return sha
+def github_get(path):
+    url = f"https://api.github.com/{path}"
+    headers = {"Accept": "application/vnd.github+json"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
 
 
-def get_changed_files(last_sha):
-    """Get files changed since last sync. If no last_sha, return all."""
-    if not last_sha:
-        return None  # Signal to do full scan
-    result = subprocess.run(
-        ["git", "-C", CLONE_DIR, "diff", "--name-only", last_sha, "HEAD"],
-        capture_output=True, text=True,
-    )
-    return [f for f in result.stdout.strip().split("\n") if f.endswith(".md") and f.startswith("docs/")]
+def should_include(filepath):
+    parts = filepath.split("/")
+    for part in parts:
+        if part in SKIP_DIRS:
+            return False
+    if filepath in SKIP_FILES:
+        return False
+    return filepath.startswith("docs/") and filepath.endswith(".md")
 
 
-def collect_all_docs():
-    docs_dir = os.path.join(CLONE_DIR, "docs")
+def list_all_docs():
+    data = github_get(f"repos/{REPO}/git/trees/main?recursive=1")
     files = []
-    for root, dirs, filenames in os.walk(docs_dir):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        for f in filenames:
-            if f.endswith(".md"):
-                files.append(os.path.join(root, f))
-    return files
+    for item in data.get("tree", []):
+        if item["type"] == "blob" and should_include(item["path"]):
+            files.append(item["path"])
+    return sorted(files)
 
 
-def format_doc(filepath):
-    rel = os.path.relpath(filepath, os.path.join(CLONE_DIR, "docs"))
-    try:
-        with open(filepath, encoding="utf-8") as f:
-            content = f.read()
-    except Exception:
-        return None
+def get_changed_files(since_timestamp):
+    commits = github_get(f"repos/{REPO}/commits?since={since_timestamp}&per_page=100")
+    if not commits:
+        return []
+    changed = set()
+    for commit in commits:
+        detail = github_get(f"repos/{REPO}/commits/{commit['sha']}")
+        for f in detail.get("files", []):
+            if should_include(f["filename"]):
+                changed.add(f["filename"])
+        time.sleep(0.5)
+    return sorted(changed)
 
-    # Strip frontmatter
+
+def fetch_file_content(filepath):
+    data = github_get(f"repos/{REPO}/contents/{filepath}")
+    if data.get("encoding") == "base64":
+        return base64.b64decode(data["content"]).decode("utf-8")
+    return data.get("content", "")
+
+
+def strip_frontmatter(content):
     if content.startswith("---"):
         try:
             end = content.index("---", 3)
-            content = content[end + 3:].strip()
+            return content[end + 3:].strip()
         except ValueError:
             pass
+    return content
 
+
+def format_doc(filepath, content):
+    content = strip_frontmatter(content)
     if len(content) < 50:
         return None
-
+    rel = filepath.replace("docs/", "", 1)
     section = rel.split("/")[0] if "/" in rel else "general"
     slug = rel.replace(".md", "").replace("/index", "")
-    url = f"https://docs.n8n.io/{slug}/"
-
+    url = f"{DOCS_BASE_URL}/{slug}/"
     return {
         "content": content,
         "context": f"n8n official documentation - {slug} ({url})",
         "tags": ["type:docs", "source:docs", f"section:{section}"],
-        "metadata": {"url": url, "section": section, "filepath": f"docs/{rel}"},
+        "metadata": {"url": url, "section": section, "filepath": filepath},
     }
 
 
@@ -114,55 +135,80 @@ def retain_batch(items):
 
 
 def main():
+    full_run = "--full" in sys.argv
+    dry_run = "--dry-run" in sys.argv
+    test_limit = None
+    if "--test" in sys.argv:
+        idx = sys.argv.index("--test")
+        test_limit = int(sys.argv[idx + 1]) if idx + 1 < len(sys.argv) else 5
+
     if not HINDSIGHT_KEY:
         print("ERROR: HINDSIGHT_API_TENANT_API_KEY not set", file=sys.stderr)
         sys.exit(1)
 
     state = load_state()
-    full_run = "--full" in sys.argv
+    sync_start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    sha = clone_or_pull()
-    print(f"At commit: {sha[:12]}", flush=True)
-
-    if full_run or not state.get("last_sha"):
-        files = collect_all_docs()
-        print(f"Full scan: {len(files)} docs", flush=True)
+    if full_run or not state.get("last_sync"):
+        print("Full scan via tree API...", flush=True)
+        files = list_all_docs()
     else:
-        changed = get_changed_files(state["last_sha"])
-        if changed is None:
-            files = collect_all_docs()
-        else:
-            files = [os.path.join(CLONE_DIR, f) for f in changed if os.path.exists(os.path.join(CLONE_DIR, f))]
-        print(f"Incremental: {len(files)} changed docs", flush=True)
+        print(f"Incremental since {state['last_sync']}...", flush=True)
+        files = get_changed_files(state["last_sync"])
 
-    if not files:
-        print("Nothing new.", flush=True)
-        state["last_sha"] = sha
-        state["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        save_state(state)
+    print(f"Files to sync: {len(files)}", flush=True)
+
+    if test_limit:
+        files = files[:test_limit]
+        print(f"Test mode: {test_limit} files only", flush=True)
+
+    if dry_run:
+        for f in files[:20]:
+            print(f"  {f}")
+        if len(files) > 20:
+            print(f"  ... and {len(files) - 20} more")
+        print(f"\n=== DRY RUN: {len(files)} files ===", flush=True)
         return
 
-    success = 0
+    retained = 0
+    skipped = 0
+    failed = 0
     batch = []
-    for filepath in files:
-        item = format_doc(filepath)
+
+    for i, filepath in enumerate(files):
+        try:
+            content = fetch_file_content(filepath)
+        except Exception as e:
+            print(f"  FETCH ERROR {filepath}: {e}", file=sys.stderr, flush=True)
+            skipped += 1
+            continue
+        item = format_doc(filepath, content)
         if not item:
+            skipped += 1
             continue
         batch.append(item)
         if len(batch) >= 5:
             if retain_batch(batch):
-                success += len(batch)
+                retained += len(batch)
+            else:
+                failed += len(batch)
             batch = []
+        if (i + 1) % 50 == 0:
+            print(f"  [{i + 1}/{len(files)}] retained={retained} skipped={skipped} failed={failed}", flush=True)
 
     if batch:
         if retain_batch(batch):
-            success += len(batch)
+            retained += len(batch)
+        else:
+            failed += len(batch)
 
-    state["last_sha"] = sha
-    state["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    state["last_count"] = success
+    state["last_sync"] = sync_start
+    state["last_run"] = sync_start
+    state["last_count"] = retained
+    state["total_synced"] = state.get("total_synced", 0) + retained
     save_state(state)
-    print(f"Done: {success} docs retained", flush=True)
+
+    print(f"\n=== DONE: {retained} retained, {skipped} skipped, {failed} failed ===", flush=True)
 
 
 if __name__ == "__main__":
