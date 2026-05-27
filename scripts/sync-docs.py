@@ -86,14 +86,15 @@ def format_doc(filepath):
     if len(content) < 50:
         return None
 
-    content = content[:6000]
     section = rel.split("/")[0] if "/" in rel else "general"
     slug = rel.replace(".md", "").replace("/index", "")
+    url = f"https://docs.n8n.io/{slug}/"
 
     return {
         "content": content,
-        "context": f"n8n docs - {slug}",
-        "tags": ["type:docs", f"section:{section}"],
+        "context": f"n8n official documentation - {slug} ({url})",
+        "tags": ["type:docs", "source:docs", f"section:{section}"],
+        "metadata": {"url": url, "section": section, "filepath": f"docs/{rel}"},
     }
 
 
