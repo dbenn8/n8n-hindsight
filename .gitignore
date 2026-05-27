@@ -1,3 +1,5 @@
 .env
 __pycache__/
 *.pyc
+n8n-all-docs.json
+n8n-duplicates.json
