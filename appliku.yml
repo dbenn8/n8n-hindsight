@@ -17,9 +17,9 @@ build_settings:
     - name: HINDSIGHT_API_LLM_PROVIDER
       value: "openai"
     - name: HINDSIGHT_API_LLM_BASE_URL
-      value: "http://hindsight_web:8643/v1"
+      value: "http://hindsight_web:8644/v1"
     - name: HINDSIGHT_API_LLM_MODEL
-      value: "consolidator"
+      value: "consolidator-n8n"
     - name: HINDSIGHT_API_LLM_API_KEY
       source: manual
     # Consolidation workers — increase to process 68K backlog faster
