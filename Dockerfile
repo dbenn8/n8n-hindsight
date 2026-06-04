@@ -32,6 +32,15 @@ RUN chmod +x /usr/local/bin/start-nginx.sh \
     && mkdir -p /var/log/nginx /var/lib/nginx /run \
     && chown -R hindsight:hindsight /var/log/nginx /var/lib/nginx /run /etc/nginx
 
+# Durable volume logging: writer + supervisord wrapper, log dir on /data.
+COPY logwriter/logwriter.py /opt/logwriter.py
+COPY logpipe.sh /usr/local/bin/logpipe.sh
+RUN chmod +x /usr/local/bin/logpipe.sh && mkdir -p /data/logs && chown -R hindsight:hindsight /data/logs
+
+# Ops-proxy admin service (standalone FastAPI; serves GET /logs).
+COPY ops-proxy/ /opt/ops-proxy/
+RUN pip install --no-cache-dir -r /opt/ops-proxy/requirements.txt
+
 USER hindsight
 
 CMD ["supervisord", "-c", "/etc/supervisord.conf"]
