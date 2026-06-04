@@ -64,6 +64,10 @@ build_settings:
       value: "http://n8nhindsight_web:8888"
     - name: SYNC_STATE_FILE
       value: "/data/sync-state.json"
+    # Admin key for the durable-log retrieval endpoint (GET /logs, ops-proxy).
+    # Set the value in the Appliku dashboard (repo is public).
+    - name: LOGS_ADMIN_KEY
+      source: manual
 
 databases:
   db:
