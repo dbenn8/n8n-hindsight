@@ -27,7 +27,8 @@ import urllib.request
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://127.0.0.1:8889")
 HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
 BANK_ID = "n8n"
-STATE_FILE = os.environ.get("SYNC_WORKFLOWS_STATE_FILE", "/data/sync-workflows-state.json")
+STATE_FILE = os.environ.get("SYNC_WORKFLOWS_STATE_FILE",
+    os.environ.get("STATE_FILE", "/data/sync-workflows-state.json"))
 
 TRIGGER_KEYWORDS = ["trigger", "webhook", "cron", "schedule", "start", "emailimap"]
 
@@ -193,8 +194,8 @@ def format_topo_unit(workflow, wf_name, wf_slug, edges):
         "tags": tags,
         "metadata": {
             "workflow_name": wf_name,
-            "node_count": len(nodes),
-            "edge_count": len(edges),
+            "node_count": str(len(nodes)),
+            "edge_count": str(len(edges)),
         },
         "strategy": "workflow_json",
     }
@@ -219,7 +220,7 @@ def format_source_unit(workflow, wf_name, wf_slug):
         ],
         "metadata": {
             "workflow_name": wf_name,
-            "node_count": len(nodes),
+            "node_count": str(len(nodes)),
         },
         "strategy": "workflow_json",
     }
