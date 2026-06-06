@@ -384,22 +384,46 @@ def find_all_properties_by_name(properties, name):
     return [p for p in properties if isinstance(p, dict) and p.get("name") == name]
 
 
+def _is_legacy_version_only(op_prop):
+    """Check if an operation property is restricted to legacy versions only.
+
+    Returns True for props with show.@version=[1] (v1-only) when a newer
+    variant exists. Used to prefer current-version operations over legacy."""
+    do = op_prop.get("displayOptions", {})
+    show = do.get("show", {})
+    ver = show.get("@version", [])
+    if not ver:
+        return False
+    # Simple version values like [1] indicate legacy-only
+    return all(isinstance(v, (int, float)) and v <= 1 for v in ver)
+
+
 def get_operations_for_resource(operation_props, resource):
     """Get the operations that apply to a specific resource.
 
     n8n nodes can have multiple 'operation' properties, each scoped to a
-    different resource via displayOptions.show.resource. This finds the
-    right one and returns its options."""
+    different resource via displayOptions.show.resource. When multiple match
+    (e.g. v1 and v2 variants), prefer the current-version one."""
+    candidates = []
     for op_prop in operation_props:
         do = op_prop.get("displayOptions", {})
         show = do.get("show", {})
         res_cond = show.get("resource", show.get("/resource"))
         if res_cond and resource in res_cond:
-            return op_prop, get_operation_options(op_prop)
-    # Fallback: if no resource-scoped operation prop, use the first one
-    if operation_props:
-        return operation_props[0], get_operation_options(operation_props[0])
-    return None, []
+            candidates.append(op_prop)
+
+    if not candidates:
+        if operation_props:
+            return operation_props[0], get_operation_options(operation_props[0])
+        return None, []
+
+    if len(candidates) == 1:
+        return candidates[0], get_operation_options(candidates[0])
+
+    # Multiple candidates: prefer non-legacy (skip v1-only when newer exists)
+    current = [c for c in candidates if not _is_legacy_version_only(c)]
+    pick = current[0] if current else candidates[0]
+    return pick, get_operation_options(pick)
 
 
 def process_node(node_row):
