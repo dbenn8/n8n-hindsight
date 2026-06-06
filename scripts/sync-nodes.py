@@ -371,6 +371,31 @@ def format_single_unit(node_row, properties):
     }
 
 
+def find_all_properties_by_name(properties, name):
+    """Find ALL property objects with a given name (not just the first)."""
+    if not isinstance(properties, list):
+        return []
+    return [p for p in properties if isinstance(p, dict) and p.get("name") == name]
+
+
+def get_operations_for_resource(operation_props, resource):
+    """Get the operations that apply to a specific resource.
+
+    n8n nodes can have multiple 'operation' properties, each scoped to a
+    different resource via displayOptions.show.resource. This finds the
+    right one and returns its options."""
+    for op_prop in operation_props:
+        do = op_prop.get("displayOptions", {})
+        show = do.get("show", {})
+        res_cond = show.get("resource", show.get("/resource"))
+        if res_cond and resource in res_cond:
+            return op_prop, get_operation_options(op_prop)
+    # Fallback: if no resource-scoped operation prop, use the first one
+    if operation_props:
+        return operation_props[0], get_operation_options(operation_props[0])
+    return None, []
+
+
 def process_node(node_row):
     """Process a single node row into one or more retain units."""
     node_type = node_row["node_type"]
@@ -383,60 +408,26 @@ def process_node(node_row):
 
     units = []
 
-    # Decide: split or single
     if is_multi_resource(properties) and len(schema_raw) > SPLIT_THRESHOLD:
         resource_prop = find_property_by_name(properties, "resource")
-        operation_prop = find_property_by_name(properties, "operation")
+        operation_props = find_all_properties_by_name(properties, "operation")
         resources = get_resource_options(resource_prop)
 
-        if resources and operation_prop:
-            # Get operations that apply per resource
-            all_operations = get_operation_options(operation_prop)
-
+        if resources and operation_props:
             for resource in resources:
-                # Filter operations that actually apply to this resource
-                applicable_ops = []
-                for op in all_operations:
-                    op_option = None
-                    for opt in operation_prop.get("options", []):
-                        if isinstance(opt, dict) and opt.get("value") == op:
-                            op_option = opt
-                            break
-
-                    # Check if this operation is shown for this resource
-                    if op_option:
-                        display_opts = op_option.get("displayOptions", {})
-                        if display_opts:
-                            show = display_opts.get("show", {})
-                            res_cond = show.get("resource", show.get("/resource"))
-                            if res_cond and resource not in res_cond:
-                                continue
-                    # Also check operation-level displayOptions on the operation property itself
-                    op_display = operation_prop.get("displayOptions", {})
-                    if op_display:
-                        show = op_display.get("show", {})
-                        res_cond = show.get("resource", show.get("/resource"))
-                        if res_cond and resource not in res_cond:
-                            continue
-
-                    applicable_ops.append(op)
-
-                if not applicable_ops:
-                    # Fallback: use all operations if filtering yielded nothing
-                    applicable_ops = all_operations
-
-                for operation in applicable_ops:
+                op_prop, ops = get_operations_for_resource(operation_props, resource)
+                if not ops:
+                    continue
+                for operation in ops:
                     unit = format_split_unit(
                         node_row, resource, operation,
-                        properties, resource_prop, operation_prop,
+                        properties, resource_prop, op_prop,
                     )
                     units.append(unit)
 
             if not units:
-                # Fallback to single unit if splitting produced nothing
                 units.append(format_single_unit(node_row, properties))
         else:
-            # Has resource but no operation or no resources — treat as single
             units.append(format_single_unit(node_row, properties))
     else:
         units.append(format_single_unit(node_row, properties))
