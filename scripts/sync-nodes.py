@@ -11,6 +11,8 @@ Usage:
     python3 sync-nodes.py --db /path/to/nodes.db --full    # re-ingest all
     python3 sync-nodes.py --db /path/to/nodes.db --dry-run # show what would be synced
     python3 sync-nodes.py --db /path/to/nodes.db --test N  # sync only N nodes
+    python3 sync-nodes.py --db /path/to/nodes.db --refresh-lookup out.json  # also regenerate lookup dict
+    python3 sync-nodes.py --db /path/to/nodes.db --refresh-lookup out.json  # standalone (no ingestion)
 
 If --db is not provided, extracts nodes.db from npm package:
     cd /tmp && npm pack n8n-mcp@latest && tar xzf n8n-mcp-*.tgz package/data/nodes.db
@@ -458,6 +460,66 @@ def load_nodes(db_path):
     return rows
 
 
+# --- Lookup dictionary generation ---
+
+def generate_lookup(db_path, output_path):
+    """Generate node_lookup_data.json from nodes.db.
+
+    Two-pass: non-triggers first (priority), triggers fill gaps.
+    Prefers nodes-base over community packages."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    non_triggers = []
+    triggers = []
+    for row in conn.execute('SELECT node_type, display_name, is_trigger FROM nodes'):
+        (triggers if row['is_trigger'] else non_triggers).append(dict(row))
+    conn.close()
+
+    non_triggers.sort(key=lambda r: (0 if r['node_type'].startswith('nodes-base.') else 1))
+    triggers.sort(key=lambda r: (0 if r['node_type'].startswith('nodes-base.') else 1))
+
+    entries = {}
+
+    def add_entry(key, nt, overwrite=True):
+        if not overwrite and key in entries:
+            return
+        if key in entries and entries[key].startswith('nodes-base.') and not nt.startswith('nodes-base.'):
+            return
+        entries[key] = nt
+
+    for row in non_triggers:
+        nt = row['node_type']
+        dn = row['display_name'].lower().strip()
+        raw_suffix = nt.split('.')[-1]
+        suffix = raw_suffix.lower()
+        add_entry(dn, nt)
+        add_entry(suffix, nt)
+        split = re.sub(r'([a-z])([A-Z])', r'\1 \2', raw_suffix).lower()
+        if split != suffix:
+            add_entry(split, nt)
+
+    for row in triggers:
+        nt = row['node_type']
+        dn = row['display_name'].lower().strip()
+        raw_suffix = nt.split('.')[-1]
+        suffix = raw_suffix.lower()
+        add_entry(dn, nt, overwrite=False)
+        add_entry(suffix, nt, overwrite=False)
+        split = re.sub(r'([a-z])([A-Z])', r'\1 \2', raw_suffix).lower()
+        if split != suffix:
+            add_entry(split, nt, overwrite=False)
+        base = re.sub(r'trigger$', '', suffix)
+        if base and base != suffix:
+            add_entry(base, nt, overwrite=False)
+
+    with open(output_path, 'w') as f:
+        json.dump(entries, f, indent=0, sort_keys=True)
+
+    print(f"Lookup dictionary: {len(entries)} entries -> {output_path}", flush=True)
+    return len(entries)
+
+
 # --- Main ---
 
 def main():
@@ -465,6 +527,7 @@ def main():
     dry_run = "--dry-run" in sys.argv
     test_limit = None
     db_path = None
+    refresh_lookup_path = None
 
     if "--test" in sys.argv:
         idx = sys.argv.index("--test")
@@ -473,6 +536,10 @@ def main():
     if "--db" in sys.argv:
         idx = sys.argv.index("--db")
         db_path = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
+
+    if "--refresh-lookup" in sys.argv:
+        idx = sys.argv.index("--refresh-lookup")
+        refresh_lookup_path = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
 
     if not db_path:
         # Try default location from npm pack extraction
@@ -488,6 +555,11 @@ def main():
         print(f"ERROR: Database not found: {db_path}", file=sys.stderr)
         sys.exit(1)
 
+    # --refresh-lookup can run standalone (no API key needed)
+    if refresh_lookup_path and not dry_run and not full_run and not test_limit:
+        generate_lookup(db_path, refresh_lookup_path)
+        return
+
     if not dry_run and not HINDSIGHT_KEY:
         print("ERROR: HINDSIGHT_API_TENANT_API_KEY not set", file=sys.stderr)
         sys.exit(1)
@@ -499,6 +571,10 @@ def main():
     print(f"Loading nodes from {db_path}...", flush=True)
     nodes = load_nodes(db_path)
     print(f"Nodes in database: {len(nodes)}", flush=True)
+
+    # Refresh lookup dictionary alongside ingestion if requested
+    if refresh_lookup_path:
+        generate_lookup(db_path, refresh_lookup_path)
 
     if test_limit:
         nodes = nodes[:test_limit]
