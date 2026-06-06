@@ -203,8 +203,13 @@ def format_field_entry(prop, depth=0):
 
 
 def collect_fields_for_operation(properties, resource, operation):
-    """Collect all fields that apply to a given resource+operation pair."""
+    """Collect all fields that apply to a given resource+operation pair.
+
+    Deduplicates by field name — when multiple properties share a name but
+    differ only by a third displayOptions condition (e.g. engagement type),
+    the first match is kept to avoid confusing duplicate entries."""
     fields = []
+    seen_names = set()
     if not isinstance(properties, list):
         return fields
 
@@ -212,11 +217,12 @@ def collect_fields_for_operation(properties, resource, operation):
         if not isinstance(prop, dict):
             continue
         name = prop.get("name", "")
-        # Skip resource and operation selectors themselves
         if name in ("resource", "operation"):
             continue
         if property_applies_to(prop, resource, operation):
-            fields.append(prop)
+            if name not in seen_names:
+                fields.append(prop)
+                seen_names.add(name)
 
     return fields
 
