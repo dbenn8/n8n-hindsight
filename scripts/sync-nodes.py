@@ -234,7 +234,7 @@ def format_split_unit(node_row, resource, operation, properties, resource_prop, 
     """Format a single (resource, operation) unit from a multi-resource node."""
     node_type = node_row["node_type"]
     display_name = node_row["display_name"]
-    node_class = node_row["node_class"] or ""
+    category = node_row["category"] or ""
     is_trigger = node_row["is_trigger"]
     service = derive_service(node_type)
 
@@ -271,7 +271,7 @@ def format_split_unit(node_row, resource, operation, properties, resource_prop, 
 
     # Build tags
     safe_service = sanitize_tag_value(service)
-    safe_node_class = sanitize_tag_value(node_class) if node_class else ""
+    safe_category = sanitize_tag_value(category) if category else ""
     tags = [
         "type:node-spec",
         "source:n8n-node-introspection",
@@ -280,8 +280,8 @@ def format_split_unit(node_row, resource, operation, properties, resource_prop, 
         f"resource:{safe_resource}",
         f"operation:{safe_resource}.{safe_operation}",
     ]
-    if safe_node_class:
-        tags.append(f"nodeclass:{safe_node_class}")
+    if safe_category:
+        tags.append(f"nodeclass:{safe_category}")
 
     return {
         "document_id": document_id,
@@ -303,7 +303,7 @@ def format_single_unit(node_row, properties):
     """Format a small/single-op node as a single unit."""
     node_type = node_row["node_type"]
     display_name = node_row["display_name"]
-    node_class = node_row["node_class"] or ""
+    category = node_row["category"] or ""
     is_trigger = node_row["is_trigger"]
     service = derive_service(node_type)
 
@@ -345,15 +345,15 @@ def format_single_unit(node_row, properties):
     document_id = f"nodespec-{node_type}"
 
     safe_service = sanitize_tag_value(service)
-    safe_node_class = sanitize_tag_value(node_class) if node_class else ""
+    safe_category = sanitize_tag_value(category) if category else ""
     tags = [
         "type:node-spec",
         "source:n8n-node-introspection",
         f"node:{node_type}",
         f"integration:{safe_service}",
     ]
-    if safe_node_class:
-        tags.append(f"nodeclass:{safe_node_class}")
+    if safe_category:
+        tags.append(f"nodeclass:{safe_category}")
 
     return {
         "document_id": document_id,
@@ -451,7 +451,7 @@ def load_nodes(db_path):
     cursor = conn.cursor()
     cursor.execute(
         "SELECT node_type, display_name, description, is_trigger, "
-        "icon, properties_schema, node_class FROM nodes ORDER BY node_type"
+        "properties_schema, category FROM nodes ORDER BY node_type"
     )
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
