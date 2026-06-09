@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
+process.env.MCP_MODE = process.env.MCP_MODE || "stdio";
+process.env.DISABLE_CONSOLE_OUTPUT = process.env.DISABLE_CONSOLE_OUTPUT || "true";
+
 const path = require("path");
 const readline = require("readline");
 
 const packageRoot = path.dirname(require.resolve("n8n-mcp/package.json"));
-const { SQLiteStorageService } = require(path.join(
+const { createDatabaseAdapter } = require(path.join(
   packageRoot,
-  "dist/services/sqlite-storage-service"
+  "dist/database/database-adapter"
 ));
 const { NodeRepository } = require(path.join(
   packageRoot,
@@ -32,10 +35,10 @@ function serializeIssue(issue) {
 }
 
 async function createValidator() {
-  const storage = new SQLiteStorageService(dbPath);
-  const repository = new NodeRepository(storage);
-  EnhancedConfigValidator.initializeSimilarityServices(repository);
-  return new WorkflowValidator(repository, EnhancedConfigValidator);
+  const adapter = await createDatabaseAdapter(dbPath);
+  const repository = new NodeRepository(adapter);
+  const validator = new WorkflowValidator(repository, EnhancedConfigValidator);
+  return { adapter, validator };
 }
 
 async function validateWorkflow(validator, workflow) {
@@ -58,7 +61,7 @@ async function validateWorkflow(validator, workflow) {
 }
 
 async function main() {
-  const validator = await createValidator();
+  const { adapter, validator } = await createValidator();
   process.stdout.write(JSON.stringify({ ready: true }) + "\n");
 
   const rl = readline.createInterface({
@@ -92,6 +95,8 @@ async function main() {
       );
     }
   }
+
+  adapter.close();
 }
 
 main().catch((error) => {

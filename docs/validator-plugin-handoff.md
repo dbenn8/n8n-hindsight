@@ -92,6 +92,24 @@ Recommended plugin behavior:
    - `repair_prompt` for an automatic retry attempt.
 5. Keep retry orchestration client-side for now.
 
+## Requested Next Step For The Plugin Session
+
+Please have the `n8n-knowledge` plugin branch perform the first end-to-end smoke tests against the deployed server endpoint rather than doing more testing in this repo.
+
+Suggested scope for that session:
+
+1. Add the server endpoint URL to the plugin config or test harness.
+2. Send a validation request using `response_text` that contains fenced workflow JSON.
+3. Send a validation request using a raw `workflow` object.
+4. Send an invalid workflow and confirm:
+   - `valid=false`
+   - `repair_messages` are actionable
+   - `feedback_block` is usable
+5. Send `original_prompt` with `include_repair_prompt=true` and confirm a usable `repair_prompt` comes back.
+6. If the plugin already has an automatic retry path, wire it to use `repair_prompt` or `feedback_block` and validate one repair attempt.
+
+The goal of the next session should be plugin-to-server validation coverage, not more server implementation.
+
 ## Suggested Plugin Request Logic
 
 - Prefer sending `workflow` when the plugin already extracted a JSON object.

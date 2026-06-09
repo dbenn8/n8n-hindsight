@@ -82,7 +82,11 @@ def _max_request_body_bytes() -> int:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     app.state.workflow_validator = workflow_validator.build_validator_bridge()
-    await app.state.workflow_validator.start()
+    app.state.workflow_validator_start_error = None
+    try:
+        await app.state.workflow_validator.start()
+    except workflow_validator.WorkflowValidatorUnavailable as exc:
+        app.state.workflow_validator_start_error = str(exc)
     try:
         yield
     finally:
@@ -157,10 +161,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc))
 
         try:
-            return await workflow_validator.inspect_request_data(
+            response = await workflow_validator.inspect_request_data(
                 request_data,
                 app.state.workflow_validator,
             )
+            app.state.workflow_validator_start_error = None
+            return response
         except workflow_validator.WorkflowValidatorUnavailable as exc:
             raise HTTPException(status_code=503, detail=str(exc))
 
