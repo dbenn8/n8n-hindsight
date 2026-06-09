@@ -1,3 +1,5 @@
+import importlib
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,12 +12,27 @@ def client(tmp_path, monkeypatch):
         "2026 consolidation ok\n2026 GREENPT fallback 401\n2026 recall done\n")
     monkeypatch.setenv("LOGS_ADMIN_KEY", "admin-secret")
     monkeypatch.setenv("LOGS_DIR", str(logs))
-    from app import app as fastapi_app
-    # disable rate limiting for functional tests (exercised separately below)
+    import workflow_validator
+    import app as app_module
+
+    class FakeValidatorBridge:
+        async def start(self):
+            return None
+
+        async def close(self):
+            return None
+
+        async def validate(self, workflow):
+            return {"valid": True, "error_count": 0, "warning_count": 0, "errors": [], "warnings": [], "statistics": {}}
+
+    monkeypatch.setattr(workflow_validator, "build_validator_bridge", lambda: FakeValidatorBridge())
+    app_module = importlib.reload(app_module)
+    fastapi_app = app_module.create_app()
     lim = getattr(fastapi_app.state, "limiter", None)
     if lim is not None:
         lim.enabled = False
-    return TestClient(fastapi_app)
+    with TestClient(fastapi_app) as test_client:
+        yield test_client
 
 
 def test_invalid_grep_pattern_400(client):
@@ -35,13 +52,28 @@ def test_rate_limited(tmp_path, monkeypatch):
     (logs / "hindsight-api.log").write_text("line\n")
     monkeypatch.setenv("LOGS_ADMIN_KEY", "admin-secret")
     monkeypatch.setenv("LOGS_DIR", str(logs))
-    from app import app as fastapi_app
+    import workflow_validator
+    import app as app_module
+
+    class FakeValidatorBridge:
+        async def start(self):
+            return None
+
+        async def close(self):
+            return None
+
+        async def validate(self, workflow):
+            return {"valid": True, "error_count": 0, "warning_count": 0, "errors": [], "warnings": [], "statistics": {}}
+
+    monkeypatch.setattr(workflow_validator, "build_validator_bridge", lambda: FakeValidatorBridge())
+    app_module = importlib.reload(app_module)
+    fastapi_app = app_module.create_app()
     fastapi_app.state.limiter.enabled = True
     fastapi_app.state.limiter.reset()
-    c = TestClient(fastapi_app)
     h = {"Authorization": "Bearer admin-secret"}
-    codes = [c.get("/logs?service=hindsight-api", headers=h).status_code
-             for _ in range(35)]
+    with TestClient(fastapi_app) as client:
+        codes = [client.get("/logs?service=hindsight-api", headers=h).status_code
+                 for _ in range(35)]
     assert 429 in codes  # exceeds 30/minute
 
 

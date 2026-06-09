@@ -1,0 +1,9 @@
+{
+  "name": "n8n-hindsight-ops-proxy",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Node runtime dependencies for server-side workflow validation.",
+  "dependencies": {
+    "n8n-mcp": "2.12.2"
+  }
+}
