@@ -1,10 +1,35 @@
 #!/usr/bin/env node
 
+const fs = require("fs");
 const path = require("path");
 
-const installRoot =
-  process.env.N8N_MCP_INSTALL_ROOT ||
-  path.dirname(require.resolve("n8n-mcp/package.json"));
+function resolveInstallRoot() {
+  if (process.env.N8N_MCP_INSTALL_ROOT) {
+    return process.env.N8N_MCP_INSTALL_ROOT;
+  }
+
+  const entryPath = require.resolve("n8n-mcp");
+  let current = path.dirname(entryPath);
+
+  for (let index = 0; index < 5; index += 1) {
+    if (
+      fs.existsSync(path.join(current, "dist")) &&
+      fs.existsSync(path.join(current, "data", "nodes.db"))
+    ) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+
+  throw new Error(`Unable to locate n8n-mcp install root from ${entryPath}`);
+}
+
+const installRoot = resolveInstallRoot();
 const distRoot = path.join(installRoot, "dist");
 const dbPath = path.join(installRoot, "data", "nodes.db");
 
