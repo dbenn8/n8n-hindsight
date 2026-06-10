@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "description": "Node runtime dependencies for server-side workflow validation.",
   "dependencies": {
-    "n8n-mcp": "2.57.3"
+    "n8n-mcp": "2.12.2"
   }
 }
