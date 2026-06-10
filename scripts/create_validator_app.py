@@ -67,7 +67,7 @@ def _request_json_app(
 
 def _activate_yaml_config(client: Appliku, team: str, app_id: int, yml_path: str) -> dict[str, Any]:
     with open(yml_path, "r", encoding="utf-8") as fh:
-        config_lines = fh.read().splitlines()
+        config_lines = [line for line in fh.read().splitlines() if line.strip()]
     return _request_json_app(
         client,
         "PATCH",
