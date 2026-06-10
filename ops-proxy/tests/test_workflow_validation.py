@@ -125,6 +125,40 @@ def test_invalid_workflow_returns_deduped_repair_messages(validator_client):
     assert body["feedback_block"].startswith("- Required property 'Name' cannot be empty")
 
 
+def test_workflow_payload_preserves_raw_validator_error_objects(validator_client):
+    client, _ = validator_client
+    payload = {
+        "workflow": {
+            "nodes": [
+                {
+                    "id": "1",
+                    "name": "Broken",
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 1,
+                    "position": [0, 0],
+                    "parameters": {},
+                }
+            ],
+            "connections": {},
+        },
+    }
+
+    response = client.post("/public/validate-workflow", json=payload)
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["errors"] == [
+        {"type": "schema_error", "message": "Required property 'Name' cannot be empty", "node": "Broken"},
+        {"type": "schema_error", "message": "Required property 'Name' cannot be empty", "node": "Broken"},
+        {"type": "expression_error", "message": "Expression format error in node Broken", "node": "Broken"},
+    ]
+    assert body["warnings"] == [
+        {"type": "warning", "message": "A warning", "node": "Broken"},
+    ]
+    assert "issues" not in body
+    assert "repair_prompt" not in body
+
+
 def test_prose_only_response_returns_no_json_feedback(validator_client):
     client, _ = validator_client
 
@@ -220,10 +254,7 @@ def test_include_repair_prompt_returns_prompt(validator_client):
     body = response.json()
 
     assert response.status_code == 200
-    assert "repair_prompt" in body
-    assert "Original user request:" in body["repair_prompt"]
-    assert "Build an n8n workflow that posts to Slack." in body["repair_prompt"]
-    assert "Current workflow draft JSON:" in body["repair_prompt"]
+    assert "repair_prompt" not in body
 
 
 def test_large_request_body_rejected_cleanly(validator_client):

@@ -211,51 +211,6 @@ def summarize_validation(validation: dict[str, Any], max_errors: int = _DEFAULT_
     return summary
 
 
-def build_repair_prompt(
-    original_prompt: str,
-    response_text: str,
-    inspection: dict[str, Any],
-) -> str:
-    """Build the same repair prompt contract used locally."""
-    lines = [
-        "Revise the n8n workflow JSON so it passes validator checks.",
-        "",
-        "Original user request:",
-        original_prompt.strip(),
-        "",
-        "Validator feedback to fix first:",
-        inspection.get("feedback_block") or "- Return valid importable workflow JSON.",
-        "",
-        "Rules:",
-        "- Preserve the user's requested behavior and the existing workflow structure where possible.",
-        "- Fix validator-reported schema, operation, typeVersion, expression, and required-field issues first.",
-        "- Return exactly one corrected importable n8n workflow JSON inside a ```json code block.",
-        "- Do not include prose before or after the JSON block.",
-    ]
-
-    workflow = inspection.get("workflow")
-    if workflow is not None:
-        lines.extend(
-            [
-                "",
-                "Current workflow draft JSON:",
-                "```json",
-                json.dumps(workflow, indent=2),
-                "```",
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                "",
-                "Previous response (no extractable workflow JSON was found):",
-                response_text.strip()[:8000],
-            ]
-        )
-
-    return "\n".join(lines) + "\n"
-
-
 def parse_validation_request(payload: Any) -> dict[str, Any]:
     """Normalize accepted request shapes into one internal contract."""
     if not isinstance(payload, dict):
@@ -333,7 +288,7 @@ async def inspect_request_data(
             "feedback_block": "\n".join(f"- {message}" for message in repair_messages),
             "errors": [{"type": "extract_error", "message": extract_error or "no_json_found"}],
             "warnings": [],
-            "statistics": {},
+            "statistics": {"totalNodes": 0, "triggerNodes": 0},
             "suggestions": [],
             "workflow": None,
         }
@@ -362,13 +317,6 @@ async def inspect_request_data(
             "suggestions": validation.get("suggestions", []),
             "workflow": workflow,
         }
-
-    if request_data["include_repair_prompt"] and request_data.get("original_prompt"):
-        inspection["repair_prompt"] = build_repair_prompt(
-            request_data["original_prompt"],
-            response_text,
-            inspection,
-        )
 
     if not request_data["debug"]:
         inspection.pop("workflow", None)
