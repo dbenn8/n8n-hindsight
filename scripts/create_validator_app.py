@@ -65,6 +65,17 @@ def _request_json_app(
     return response.json()
 
 
+def _activate_yaml_config(client: Appliku, team: str, app_id: int, yml_path: str) -> dict[str, Any]:
+    with open(yml_path, "r", encoding="utf-8") as fh:
+        config_lines = fh.read().splitlines()
+    return _request_json_app(
+        client,
+        "PATCH",
+        f"/api/team/{quote(team, safe='')}/applications/{app_id}/validate_yaml_config",
+        {"config_data": config_lines},
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--team", default=DEFAULT_TEAM)
@@ -111,9 +122,16 @@ def main() -> None:
         validator_app = client.apps.get(args.team, app_id=updated["id"])
         action = "updated"
 
+    yaml_state = _activate_yaml_config(client, args.team, validator_app.id, DEFAULT_YML_PATH)
+
     print(
         f"{action} validator app {validator_app.name} "
         f"(id={validator_app.id}, subdomain={validator_app.default_subdomain})"
+    )
+    print(
+        "yaml config state:",
+        yaml_state.get("config_file_status_display"),
+        f"(status={yaml_state.get('config_file_status')})",
     )
 
     if args.configure_main_forward_url:
