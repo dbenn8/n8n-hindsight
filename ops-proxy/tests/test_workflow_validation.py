@@ -3,6 +3,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.responses import JSONResponse
 
 
 class FakeValidatorBridge:
@@ -279,3 +280,53 @@ def test_malformed_json_body_returns_400(validator_client):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Malformed JSON body"
+
+
+def test_forward_mode_proxies_without_starting_local_validator(monkeypatch):
+    monkeypatch.setenv(
+        "WORKFLOW_VALIDATOR_FORWARD_URL",
+        "https://validator.example/public/validate-workflow",
+    )
+
+    import workflow_validator
+    import app as app_module
+
+    def _unexpected_bridge():
+        raise AssertionError("local validator should not be constructed in forward mode")
+
+    async def _fake_forward(body: bytes):
+        payload = json.loads(body)
+        assert payload["workflow"]["nodes"][0]["name"] == "Manual Trigger"
+        return JSONResponse({"valid": True, "forwarded": True})
+
+    monkeypatch.setattr(workflow_validator, "build_validator_bridge", _unexpected_bridge)
+    app_module = importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "_forward_validation_request", _fake_forward)
+
+    fastapi_app = app_module.create_app()
+    lim = getattr(fastapi_app.state, "limiter", None)
+    if lim is not None:
+        lim.enabled = False
+
+    with TestClient(fastapi_app) as client:
+        response = client.post(
+            "/public/validate-workflow",
+            json={
+                "workflow": {
+                    "nodes": [
+                        {
+                            "id": "1",
+                            "name": "Manual Trigger",
+                            "type": "n8n-nodes-base.manualTrigger",
+                            "typeVersion": 1,
+                            "position": [0, 0],
+                            "parameters": {},
+                        }
+                    ],
+                    "connections": {},
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"valid": True, "forwarded": True}

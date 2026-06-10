@@ -1,13 +1,16 @@
 """Standalone admin + workflow validation service."""
+import asyncio
 from contextlib import asynccontextmanager
 from functools import wraps
 import hmac
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 
 from fastapi import FastAPI, HTTPException, Request
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 import workflow_validator
 
@@ -66,6 +69,7 @@ _SERVICE_RE = re.compile(r"^[a-z0-9-]+$")
 _MAX_GREP_LEN = 200
 _MAX_LINES = 10_000
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 1_048_576
+_DEFAULT_FORWARD_TIMEOUT_SECONDS = 30
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -79,10 +83,73 @@ def _max_request_body_bytes() -> int:
     return max(1_024, value)
 
 
+def _validator_forward_url() -> str | None:
+    raw = os.environ.get("WORKFLOW_VALIDATOR_FORWARD_URL", "").strip()
+    return raw or None
+
+
+def _validator_forward_timeout_seconds() -> int:
+    raw = os.environ.get("WORKFLOW_VALIDATOR_FORWARD_TIMEOUT_SECONDS", "")
+    try:
+        value = int(raw) if raw else _DEFAULT_FORWARD_TIMEOUT_SECONDS
+    except ValueError:
+        value = _DEFAULT_FORWARD_TIMEOUT_SECONDS
+    return max(1, value)
+
+
+async def _forward_validation_request(body: bytes) -> Response:
+    url = _validator_forward_url()
+    if not url:
+        raise workflow_validator.WorkflowValidatorUnavailable(
+            "Workflow validator forward URL is not configured"
+        )
+
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    def _post() -> tuple[int, str, bytes]:
+        try:
+            with urllib.request.urlopen(
+                req,
+                timeout=_validator_forward_timeout_seconds(),
+            ) as resp:
+                return (
+                    resp.status,
+                    resp.headers.get("Content-Type", "application/json"),
+                    resp.read(),
+                )
+        except urllib.error.HTTPError as exc:
+            return (
+                exc.code,
+                exc.headers.get("Content-Type", "application/json"),
+                exc.read(),
+            )
+
+    try:
+        status_code, content_type, payload = await asyncio.to_thread(_post)
+    except Exception as exc:
+        raise workflow_validator.WorkflowValidatorUnavailable(
+            f"Workflow validator forward request failed: {exc}"
+        ) from exc
+
+    media_type = content_type.split(";", 1)[0] if content_type else "application/json"
+    return Response(content=payload, status_code=status_code, media_type=media_type)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    app.state.workflow_validator = workflow_validator.build_validator_bridge()
+    app.state.workflow_validator_forward_url = _validator_forward_url()
     app.state.workflow_validator_start_error = None
+    if app.state.workflow_validator_forward_url:
+        app.state.workflow_validator = None
+        yield
+        return
+
+    app.state.workflow_validator = workflow_validator.build_validator_bridge()
     try:
         await app.state.workflow_validator.start()
     except workflow_validator.WorkflowValidatorUnavailable as exc:
@@ -103,7 +170,10 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "validator_mode": "forward" if app.state.workflow_validator_forward_url else "local",
+        }
 
     @app.get("/logs")
     @limiter.limit("30/minute")
@@ -149,6 +219,12 @@ def create_app() -> FastAPI:
         body = await request.body()
         if len(body) > _max_request_body_bytes():
             raise HTTPException(status_code=413, detail="Request body too large")
+
+        if app.state.workflow_validator_forward_url:
+            try:
+                return await _forward_validation_request(body)
+            except workflow_validator.WorkflowValidatorUnavailable as exc:
+                raise HTTPException(status_code=503, detail=str(exc))
 
         try:
             payload = json.loads(body)

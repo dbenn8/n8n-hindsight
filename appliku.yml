@@ -68,6 +68,10 @@ build_settings:
     # Set the value in the Appliku dashboard (repo is public).
     - name: LOGS_ADMIN_KEY
       source: manual
+    # Optional dedicated validator service URL. When set, ops-proxy forwards
+    # POST /public/validate-workflow to that service instead of validating in-process.
+    - name: WORKFLOW_VALIDATOR_FORWARD_URL
+      source: manual
 
 databases:
   db:

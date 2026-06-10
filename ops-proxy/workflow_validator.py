@@ -6,22 +6,20 @@ import asyncio
 import json
 import os
 import re
-from collections import deque
 from pathlib import Path
 from typing import Any
 
-_MAX_STDERR_LINES = 20
 _DEFAULT_MAX_ERRORS = 8
 _MAX_REPAIR_MESSAGES = 50
 _DEFAULT_VALIDATOR_TIMEOUT_SECONDS = 20
 
 
 class WorkflowValidatorUnavailable(RuntimeError):
-    """Raised when the persistent n8n-mcp validator process is unavailable."""
+    """Raised when the Node-based n8n-mcp validator process is unavailable."""
 
 
 class NodeValidatorBridge:
-    """Persistent stdio bridge to the Node-based n8n-mcp validator."""
+    """One-shot stdio bridge to the Node-based n8n-mcp validator."""
 
     def __init__(
         self,
@@ -30,128 +28,76 @@ class NodeValidatorBridge:
     ):
         self.script_path = Path(script_path or Path(__file__).with_name("validator_bridge.js"))
         self.timeout_seconds = timeout_seconds
-        self._process: asyncio.subprocess.Process | None = None
-        self._lock = asyncio.Lock()
-        self._stderr_tail: deque[str] = deque(maxlen=_MAX_STDERR_LINES)
-        self._stderr_task: asyncio.Task[None] | None = None
+        self.n8n_mcp_install_root = os.environ.get("N8N_MCP_INSTALL_ROOT", "").strip()
 
     async def start(self) -> None:
-        async with self._lock:
-            if self._process and self._process.returncode is None:
-                return
+        if not self.script_path.is_file():
+            raise WorkflowValidatorUnavailable(
+                f"Workflow validator bridge script is missing: {self.script_path}"
+            )
 
-            self._stderr_tail.clear()
-            self._process = await asyncio.create_subprocess_exec(
+    async def close(self) -> None:
+        return None
+
+    async def validate(self, workflow: dict[str, Any]) -> dict[str, Any]:
+        await self.start()
+
+        env = dict(os.environ)
+        if self.n8n_mcp_install_root:
+            env["N8N_MCP_INSTALL_ROOT"] = self.n8n_mcp_install_root
+
+        try:
+            process = await asyncio.create_subprocess_exec(
                 "node",
                 str(self.script_path),
                 cwd=str(self.script_path.parent),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
-            self._stderr_task = asyncio.create_task(self._capture_stderr())
+        except FileNotFoundError as exc:
+            raise WorkflowValidatorUnavailable(
+                "Node.js is not installed for the workflow validator"
+            ) from exc
 
-            ready_line = await self._read_stdout_line()
-            if not ready_line:
-                raise WorkflowValidatorUnavailable(
-                    "Workflow validator failed to start"
-                )
-            try:
-                ready = json.loads(ready_line)
-            except json.JSONDecodeError as exc:
-                raise WorkflowValidatorUnavailable(
-                    f"Workflow validator emitted invalid startup payload: {ready_line}"
-                ) from exc
-            if not ready.get("ready"):
-                detail = ready.get("error") or "Workflow validator failed to initialize"
-                raise WorkflowValidatorUnavailable(detail)
-
-    async def close(self) -> None:
-        async with self._lock:
-            if self._process and self._process.returncode is None:
-                self._process.terminate()
-                try:
-                    await asyncio.wait_for(self._process.wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    self._process.kill()
-                    await self._process.wait()
-            self._process = None
-            if self._stderr_task:
-                self._stderr_task.cancel()
-                self._stderr_task = None
-
-    async def validate(self, workflow: dict[str, Any]) -> dict[str, Any]:
-        if self._process is None or self._process.returncode is not None:
-            await self.start()
-
-        async with self._lock:
-            if self._process is None or self._process.stdin is None:
-                raise WorkflowValidatorUnavailable("Workflow validator is unavailable")
-            if self._process.stdout is None:
-                raise WorkflowValidatorUnavailable("Workflow validator stdout is unavailable")
-
-            payload = json.dumps({"workflow": workflow}) + "\n"
-            try:
-                self._process.stdin.write(payload.encode("utf-8"))
-                await asyncio.wait_for(
-                    self._process.stdin.drain(),
-                    timeout=self.timeout_seconds,
-                )
-                line = await self._read_stdout_line()
-            except asyncio.TimeoutError as exc:
-                raise WorkflowValidatorUnavailable(
-                    "Workflow validator timed out"
-                ) from exc
-            except BrokenPipeError as exc:
-                raise WorkflowValidatorUnavailable(
-                    "Workflow validator process exited unexpectedly"
-                ) from exc
-
-            if not line:
-                raise WorkflowValidatorUnavailable(self._failure_message())
-
-            try:
-                response = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise WorkflowValidatorUnavailable(
-                    f"Workflow validator returned invalid JSON: {line}"
-                ) from exc
-
-            if response.get("error"):
-                raise WorkflowValidatorUnavailable(str(response["error"]))
-
-            result = response.get("result")
-            if not isinstance(result, dict):
-                raise WorkflowValidatorUnavailable("Workflow validator returned no result payload")
-            return result
-
-    async def _read_stdout_line(self) -> str:
-        if self._process is None or self._process.stdout is None:
-            raise WorkflowValidatorUnavailable("Workflow validator stdout is unavailable")
         try:
-            line = await asyncio.wait_for(
-                self._process.stdout.readline(),
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(json.dumps(workflow).encode("utf-8")),
                 timeout=self.timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
+            process.kill()
+            await process.wait()
+            raise WorkflowValidatorUnavailable("Workflow validator timed out") from exc
+
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+
+        if process.returncode != 0:
             raise WorkflowValidatorUnavailable(
-                "Workflow validator did not respond in time"
+                self._failure_message(stderr_text, stdout_text)
+            )
+        if not stdout_text:
+            raise WorkflowValidatorUnavailable(
+                self._failure_message(stderr_text, stdout_text)
+            )
+
+        try:
+            response = json.loads(stdout_text)
+        except json.JSONDecodeError as exc:
+            raise WorkflowValidatorUnavailable(
+                f"Workflow validator returned invalid JSON: {stdout_text}"
             ) from exc
-        return line.decode("utf-8").strip()
 
-    async def _capture_stderr(self) -> None:
-        if self._process is None or self._process.stderr is None:
-            return
-        while True:
-            line = await self._process.stderr.readline()
-            if not line:
-                return
-            self._stderr_tail.append(line.decode("utf-8", errors="replace").strip())
+        if not isinstance(response, dict):
+            raise WorkflowValidatorUnavailable("Workflow validator returned no result payload")
+        return response
 
-    def _failure_message(self) -> str:
-        detail = " ".join(line for line in self._stderr_tail if line)
+    def _failure_message(self, stderr_text: str, stdout_text: str) -> str:
+        detail = " ".join(part for part in [stderr_text, stdout_text] if part)
         if detail:
-            return f"Workflow validator failed: {detail}"
+            return f"Workflow validator failed: {detail[:1000]}"
         return "Workflow validator failed without details"
 
 

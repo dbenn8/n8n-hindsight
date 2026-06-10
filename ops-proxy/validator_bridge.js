@@ -1,30 +1,26 @@
 #!/usr/bin/env node
 
-process.env.MCP_MODE = process.env.MCP_MODE || "stdio";
-process.env.DISABLE_CONSOLE_OUTPUT = process.env.DISABLE_CONSOLE_OUTPUT || "true";
-
 const path = require("path");
-const readline = require("readline");
 
-const packageRoot = path.dirname(require.resolve("n8n-mcp/package.json"));
-const { createDatabaseAdapter } = require(path.join(
-  packageRoot,
-  "dist/database/database-adapter"
+const installRoot =
+  process.env.N8N_MCP_INSTALL_ROOT ||
+  path.dirname(require.resolve("n8n-mcp/package.json"));
+const distRoot = path.join(installRoot, "dist");
+const dbPath = path.join(installRoot, "data", "nodes.db");
+
+const { SQLiteStorageService } = require(path.join(
+  distRoot,
+  "services/sqlite-storage-service"
 ));
-const { NodeRepository } = require(path.join(
-  packageRoot,
-  "dist/database/node-repository"
-));
+const { NodeRepository } = require(path.join(distRoot, "database/node-repository"));
 const { WorkflowValidator } = require(path.join(
-  packageRoot,
-  "dist/services/workflow-validator"
+  distRoot,
+  "services/workflow-validator"
 ));
 const { EnhancedConfigValidator } = require(path.join(
-  packageRoot,
-  "dist/services/enhanced-config-validator"
+  distRoot,
+  "services/enhanced-config-validator"
 ));
-
-const dbPath = path.join(packageRoot, "data", "nodes.db");
 
 function serializeIssue(issue) {
   return {
@@ -34,14 +30,12 @@ function serializeIssue(issue) {
   };
 }
 
-async function createValidator() {
-  const adapter = await createDatabaseAdapter(dbPath);
-  const repository = new NodeRepository(adapter);
-  const validator = new WorkflowValidator(repository, EnhancedConfigValidator);
-  return { adapter, validator };
-}
+async function validate(workflow) {
+  const storage = new SQLiteStorageService(dbPath);
+  const repo = new NodeRepository(storage);
+  EnhancedConfigValidator.initializeSimilarityServices(repo);
+  const validator = new WorkflowValidator(repo, EnhancedConfigValidator);
 
-async function validateWorkflow(validator, workflow) {
   const result = await validator.validateWorkflow(workflow, {
     validateNodes: true,
     validateConnections: true,
@@ -61,53 +55,39 @@ async function validateWorkflow(validator, workflow) {
 }
 
 async function main() {
-  const { adapter, validator } = await createValidator();
-  process.stdout.write(JSON.stringify({ ready: true }) + "\n");
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    crlfDelay: Infinity,
-  });
-
-  for await (const line of rl) {
-    if (!line.trim()) {
-      continue;
-    }
-
-    let request;
-    try {
-      request = JSON.parse(line);
-    } catch (error) {
-      process.stdout.write(
-        JSON.stringify({ error: `Invalid request payload: ${error.message}` }) + "\n"
-      );
-      continue;
-    }
-
-    try {
-      const result = await validateWorkflow(validator, request.workflow || {});
-      process.stdout.write(JSON.stringify({ result }) + "\n");
-    } catch (error) {
-      process.stdout.write(
-        JSON.stringify({
-          error: error instanceof Error ? error.message : String(error),
-        }) + "\n"
-      );
-    }
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
   }
 
-  adapter.close();
+  try {
+    const workflow = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const result = await validate(workflow);
+    process.stdout.write(JSON.stringify(result));
+  } catch (error) {
+    process.stdout.write(
+      JSON.stringify({
+        valid: false,
+        error_count: 1,
+        warning_count: 0,
+        errors: [
+          {
+            type: "validator_bridge_error",
+            message: error instanceof Error ? error.message : String(error),
+            node: null,
+          },
+        ],
+        warnings: [],
+        statistics: {},
+        suggestions: [],
+      })
+    );
+  }
 }
 
 main().catch((error) => {
   process.stderr.write(
     `${error instanceof Error ? error.stack || error.message : String(error)}\n`
-  );
-  process.stdout.write(
-    JSON.stringify({
-      ready: false,
-      error: error instanceof Error ? error.message : String(error),
-    }) + "\n"
   );
   process.exit(1);
 });

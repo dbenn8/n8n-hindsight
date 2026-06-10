@@ -1,0 +1,16 @@
+.git
+.claude
+.pytest_cache
+.DS_Store
+
+docs
+existing-code-filepaths.json
+existing-github-numbers.json
+n8n-all-docs.json
+n8n-docs-export.json
+n8n-duplicates.json
+
+logwriter/__pycache__
+ops-proxy/__pycache__
+ops-proxy/.pytest_cache
+scripts/__pycache__
