@@ -5,6 +5,13 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.responses import JSONResponse
 
+FAKE_VALIDATOR_INFO = {
+    "validator_engine": "n8n-mcp",
+    "configured_n8n_mcp_version": "2.57.3",
+    "installed_n8n_mcp_version": "2.57.3",
+    "nodes_db_sha256": "abc123",
+}
+
 
 class FakeValidatorBridge:
     def __init__(self):
@@ -57,6 +64,7 @@ def validator_client(tmp_path, monkeypatch):
     import app as app_module
 
     monkeypatch.setattr(workflow_validator, "build_validator_bridge", lambda: fake_validator)
+    monkeypatch.setattr(workflow_validator, "get_validator_metadata", lambda: dict(FAKE_VALIDATOR_INFO))
     app_module = importlib.reload(app_module)
     fastapi_app = app_module.create_app()
     lim = getattr(fastapi_app.state, "limiter", None)
@@ -89,8 +97,35 @@ def test_raw_workflow_json_returns_valid_summary(validator_client):
     assert response.json()["valid"] is True
     assert response.json()["has_json"] is True
     assert response.json()["node_count"] == 1
+    assert response.json()["validator_info"] == FAKE_VALIDATOR_INFO
     assert fake_validator.start_calls == 1
     assert len(fake_validator.calls) == 1
+
+
+def test_health_returns_local_validator_info(validator_client):
+    client, _ = validator_client
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "validator_mode": "local",
+        "validator_info": FAKE_VALIDATOR_INFO,
+    }
+
+
+def test_public_validator_health_matches_local_health(validator_client):
+    client, _ = validator_client
+
+    response = client.get("/public/validator-health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "validator_mode": "local",
+        "validator_info": FAKE_VALIDATOR_INFO,
+    }
 
 
 def test_invalid_workflow_returns_deduped_repair_messages(validator_client):
@@ -300,6 +335,7 @@ def test_forward_mode_proxies_without_starting_local_validator(monkeypatch):
         return JSONResponse({"valid": True, "forwarded": True})
 
     monkeypatch.setattr(workflow_validator, "build_validator_bridge", _unexpected_bridge)
+    monkeypatch.setattr(workflow_validator, "get_validator_metadata", lambda: dict(FAKE_VALIDATOR_INFO))
     app_module = importlib.reload(app_module)
     monkeypatch.setattr(app_module, "_forward_validation_request", _fake_forward)
 
@@ -330,3 +366,56 @@ def test_forward_mode_proxies_without_starting_local_validator(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"valid": True, "forwarded": True}
+
+
+def test_forward_mode_health_reports_downstream_validator_info(monkeypatch):
+    monkeypatch.setenv(
+        "WORKFLOW_VALIDATOR_FORWARD_URL",
+        "https://validator.example/public/validate-workflow",
+    )
+
+    import workflow_validator
+    import app as app_module
+
+    def _unexpected_bridge():
+        raise AssertionError("local validator should not be constructed in forward mode")
+
+    async def _fake_forward_health():
+        return {
+            "status": "ok",
+            "validator_mode": "local",
+            "validator_info": {
+                "validator_engine": "n8n-mcp",
+                "configured_n8n_mcp_version": "2.57.3",
+                "installed_n8n_mcp_version": "2.57.3",
+                "nodes_db_sha256": "remote456",
+            },
+        }
+
+    monkeypatch.setattr(workflow_validator, "build_validator_bridge", _unexpected_bridge)
+    monkeypatch.setattr(workflow_validator, "get_validator_metadata", lambda: dict(FAKE_VALIDATOR_INFO))
+    app_module = importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "_fetch_forward_health", _fake_forward_health)
+
+    fastapi_app = app_module.create_app()
+    lim = getattr(fastapi_app.state, "limiter", None)
+    if lim is not None:
+        lim.enabled = False
+
+    with TestClient(fastapi_app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "validator_mode": "forward",
+        "validator_forward_url": "https://validator.example/public/validate-workflow",
+        "forward_status": "ok",
+        "forward_validator_mode": "local",
+        "validator_info": {
+            "validator_engine": "n8n-mcp",
+            "configured_n8n_mcp_version": "2.57.3",
+            "installed_n8n_mcp_version": "2.57.3",
+            "nodes_db_sha256": "remote456",
+        },
+    }

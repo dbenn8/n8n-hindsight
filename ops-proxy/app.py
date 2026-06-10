@@ -7,6 +7,7 @@ import json
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from fastapi import FastAPI, HTTPException, Request
@@ -70,6 +71,7 @@ _MAX_GREP_LEN = 200
 _MAX_LINES = 10_000
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 1_048_576
 _DEFAULT_FORWARD_TIMEOUT_SECONDS = 30
+_DEFAULT_FORWARD_HEALTH_TIMEOUT_SECONDS = 5
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -95,6 +97,17 @@ def _validator_forward_timeout_seconds() -> int:
     except ValueError:
         value = _DEFAULT_FORWARD_TIMEOUT_SECONDS
     return max(1, value)
+
+
+def _validator_forward_health_url() -> str | None:
+    validate_url = _validator_forward_url()
+    if not validate_url:
+        return None
+
+    parsed = urllib.parse.urlsplit(validate_url)
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, "/health", "", "")
+    )
 
 
 async def _forward_validation_request(body: bytes) -> Response:
@@ -140,10 +153,39 @@ async def _forward_validation_request(body: bytes) -> Response:
     return Response(content=payload, status_code=status_code, media_type=media_type)
 
 
+async def _fetch_forward_health() -> dict | None:
+    url = _validator_forward_health_url()
+    if not url:
+        return None
+
+    req = urllib.request.Request(url, method="GET")
+
+    def _get() -> dict:
+        with urllib.request.urlopen(
+            req,
+            timeout=min(
+                _validator_forward_timeout_seconds(),
+                _DEFAULT_FORWARD_HEALTH_TIMEOUT_SECONDS,
+            ),
+        ) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    try:
+        payload = await asyncio.to_thread(_get)
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "detail": str(exc),
+        }
+
+    return payload if isinstance(payload, dict) else None
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     app.state.workflow_validator_forward_url = _validator_forward_url()
     app.state.workflow_validator_start_error = None
+    app.state.workflow_validator_info = workflow_validator.get_validator_metadata()
     if app.state.workflow_validator_forward_url:
         app.state.workflow_validator = None
         yield
@@ -168,12 +210,41 @@ def create_app() -> FastAPI:
     async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
         return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
 
+    async def _health_payload() -> dict:
+        if app.state.workflow_validator_forward_url:
+            forward_health = await _fetch_forward_health()
+            payload = {
+                "status": "ok",
+                "validator_mode": "forward",
+                "validator_forward_url": app.state.workflow_validator_forward_url,
+            }
+            if forward_health:
+                payload["forward_status"] = forward_health.get("status")
+                payload["forward_validator_mode"] = forward_health.get("validator_mode")
+                payload["validator_info"] = forward_health.get("validator_info")
+                if forward_health.get("status") not in {None, "ok"}:
+                    payload["status"] = "degraded"
+                if forward_health.get("detail"):
+                    payload["forward_detail"] = forward_health.get("detail")
+            return payload
+
+        payload = {
+            "status": "ok",
+            "validator_mode": "local",
+            "validator_info": app.state.workflow_validator_info,
+        }
+        if app.state.workflow_validator_start_error:
+            payload["status"] = "degraded"
+            payload["validator_start_error"] = app.state.workflow_validator_start_error
+        return payload
+
     @app.get("/health")
     async def health():
-        return {
-            "status": "ok",
-            "validator_mode": "forward" if app.state.workflow_validator_forward_url else "local",
-        }
+        return await _health_payload()
+
+    @app.get("/public/validator-health")
+    async def public_validator_health():
+        return await _health_payload()
 
     @app.get("/logs")
     @limiter.limit("30/minute")
@@ -240,6 +311,7 @@ def create_app() -> FastAPI:
             response = await workflow_validator.inspect_request_data(
                 request_data,
                 app.state.workflow_validator,
+                validator_info=app.state.workflow_validator_info,
             )
             app.state.workflow_validator_start_error = None
             return response

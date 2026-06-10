@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -16,6 +17,73 @@ _DEFAULT_VALIDATOR_TIMEOUT_SECONDS = 20
 
 class WorkflowValidatorUnavailable(RuntimeError):
     """Raised when the Node-based n8n-mcp validator process is unavailable."""
+
+
+def _script_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _read_json_file(path: Path) -> dict[str, Any] | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _resolve_n8n_mcp_install_root() -> Path | None:
+    env_root = os.environ.get("N8N_MCP_INSTALL_ROOT", "").strip()
+    candidates = []
+    if env_root:
+        candidates.append(Path(env_root))
+
+    script_dir = _script_dir()
+    candidates.extend(
+        [
+            script_dir / "node_modules" / "n8n-mcp",
+            script_dir.parent / "node_modules" / "n8n-mcp",
+        ]
+    )
+
+    for candidate in candidates:
+        if (candidate / "package.json").is_file():
+            return candidate
+    return None
+
+
+def _sha256_file(path: Path) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def get_validator_metadata() -> dict[str, Any]:
+    script_dir = _script_dir()
+    configured_package = _read_json_file(script_dir / "package.json") or {}
+    install_root = _resolve_n8n_mcp_install_root()
+    installed_package = (
+        _read_json_file(install_root / "package.json") if install_root is not None else None
+    ) or {}
+    nodes_db_path = install_root / "data" / "nodes.db" if install_root is not None else None
+
+    return {
+        "validator_engine": "n8n-mcp",
+        "configured_n8n_mcp_version": (
+            configured_package.get("dependencies", {}) or {}
+        ).get("n8n-mcp"),
+        "installed_n8n_mcp_version": installed_package.get("version"),
+        "nodes_db_sha256": (
+            _sha256_file(nodes_db_path)
+            if nodes_db_path is not None and nodes_db_path.is_file()
+            else None
+        ),
+    }
 
 
 class NodeValidatorBridge:
@@ -207,6 +275,7 @@ def parse_validation_request(payload: Any) -> dict[str, Any]:
 async def inspect_request_data(
     request_data: dict[str, Any],
     validator: NodeValidatorBridge,
+    validator_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the server-side validation response contract."""
     workflow = request_data["workflow"]
@@ -266,6 +335,9 @@ async def inspect_request_data(
 
     if not request_data["debug"]:
         inspection.pop("workflow", None)
+
+    if validator_info is not None:
+        inspection["validator_info"] = validator_info
 
     return inspection
 
