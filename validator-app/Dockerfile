@@ -13,6 +13,6 @@ COPY ops-proxy/package.json /app/package.json
 RUN npm install --omit=dev
 
 COPY ops-proxy/ /app/
-RUN pip3 install --no-cache-dir -r /app/requirements.txt
+RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
 
 CMD ["python3", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
