@@ -11,9 +11,10 @@ build_settings:
       value: "0.0.0.0"
     - name: HINDSIGHT_API_PORT
       value: "8889"
-    # LLM for consolidation — Claude Haiku via the personal instance's Hermes proxy
-    # (hindsight_web:8643 on the shared `applications` Docker network). API key =
-    # that proxy's API_SERVER_KEY, set as a dashboard secret (repo is public).
+    # LLM for consolidation — routed through the personal instance's Hermes gateway
+    # (consolidator-n8n profile, currently DeepSeek primary) on the shared
+    # `applications` Docker network. API key = that gateway's API_SERVER_KEY,
+    # set as a dashboard secret (repo is public).
     - name: HINDSIGHT_API_LLM_PROVIDER
       value: "openai"
     - name: HINDSIGHT_API_LLM_BASE_URL
