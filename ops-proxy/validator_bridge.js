@@ -46,6 +46,25 @@ const { EnhancedConfigValidator } = require(path.join(
   distRoot,
   "services/enhanced-config-validator"
 ));
+const { ConfigValidator } = require(path.join(
+  distRoot,
+  "services/config-validator"
+));
+
+// Keep behavior identical to the plugin's local bridge: skip options
+// validation for properties with empty options arrays (dynamically loaded
+// via loadOptionsMethod). Without this, cloud and local validators disagree
+// on exactly those workflows, defeating the preflight parity guarantee.
+const origValidatePropertyTypes = ConfigValidator.validatePropertyTypes;
+ConfigValidator.validatePropertyTypes = function (properties, config, errors) {
+  const filteredProperties = properties.filter(function (prop) {
+    if (prop && prop.type === "options" && prop.options && Array.isArray(prop.options) && prop.options.length === 0) {
+      return false;
+    }
+    return true;
+  });
+  origValidatePropertyTypes.call(this, filteredProperties, config, errors);
+};
 
 function serializeIssue(issue) {
   return {
