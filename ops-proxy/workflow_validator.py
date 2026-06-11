@@ -279,15 +279,11 @@ def parse_validation_request(payload: Any) -> dict[str, Any]:
     if ("nodes" in payload or "connections" in payload) and "workflow" not in payload:
         workflow = payload
         response_text = None
-        original_prompt = None
-        include_repair_prompt = False
         debug = False
         max_errors = _DEFAULT_MAX_ERRORS
     else:
         workflow = payload.get("workflow")
         response_text = payload.get("response_text")
-        original_prompt = payload.get("original_prompt")
-        include_repair_prompt = payload.get("include_repair_prompt", False)
         debug = payload.get("debug", False)
         max_errors = payload.get("max_errors", _DEFAULT_MAX_ERRORS)
 
@@ -295,10 +291,6 @@ def parse_validation_request(payload: Any) -> dict[str, Any]:
         raise ValueError("'workflow' must be a JSON object")
     if response_text is not None and not isinstance(response_text, str):
         raise ValueError("'response_text' must be a string")
-    if original_prompt is not None and not isinstance(original_prompt, str):
-        raise ValueError("'original_prompt' must be a string")
-    if not isinstance(include_repair_prompt, bool):
-        raise ValueError("'include_repair_prompt' must be a boolean")
     if not isinstance(debug, bool):
         raise ValueError("'debug' must be a boolean")
     if not isinstance(max_errors, int):
@@ -311,8 +303,6 @@ def parse_validation_request(payload: Any) -> dict[str, Any]:
     return {
         "workflow": workflow,
         "response_text": response_text,
-        "original_prompt": original_prompt,
-        "include_repair_prompt": include_repair_prompt,
         "debug": debug,
         "max_errors": max_errors,
     }

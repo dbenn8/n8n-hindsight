@@ -265,7 +265,7 @@ def test_bare_embedded_json_extraction_works(validator_client):
     assert len(fake_validator.calls) == 1
 
 
-def test_include_repair_prompt_returns_prompt(validator_client):
+def test_repair_prompt_not_included_in_response(validator_client):
     client, _ = validator_client
     response = client.post(
         "/public/validate-workflow",
@@ -283,14 +283,41 @@ def test_include_repair_prompt_returns_prompt(validator_client):
                 ],
                 "connections": {},
             },
-            "original_prompt": "Build an n8n workflow that posts to Slack.",
-            "include_repair_prompt": True,
         },
     )
     body = response.json()
 
     assert response.status_code == 200
     assert "repair_prompt" not in body
+
+
+def test_unknown_request_fields_ignored_gracefully(validator_client):
+    """Verify that old clients sending removed fields (include_repair_prompt, original_prompt) don't break."""
+    client, fake_validator = validator_client
+    response = client.post(
+        "/public/validate-workflow",
+        json={
+            "workflow": {
+                "nodes": [
+                    {
+                        "id": "1",
+                        "name": "Manual Trigger",
+                        "type": "n8n-nodes-base.manualTrigger",
+                        "typeVersion": 1,
+                        "position": [0, 0],
+                        "parameters": {},
+                    }
+                ],
+                "connections": {},
+            },
+            "original_prompt": "Build an n8n workflow that posts to Slack.",
+            "include_repair_prompt": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["valid"] is True
+    assert len(fake_validator.calls) == 1
 
 
 def test_large_request_body_rejected_cleanly(validator_client):
