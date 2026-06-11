@@ -180,7 +180,7 @@ def format_item(item, item_type):
     content = f"GitHub {item_type} #{number}: {title}\n\n{body}".strip()
 
     context = f"github {item_type} #{number} - {title} ({url})"
-    tags = [f"type:github-{item_type}", "source:github"]
+    tags = [f"type:github-{item_type}", f"source:github-{item_type}s", "pipeline:doc_id"]
     for label in labels:
         tags.append(f"label:{label}")
     if state == "closed":
@@ -202,6 +202,7 @@ def format_item(item, item_type):
         metadata["closed_at"] = item["closed_at"]
 
     return {
+        "document_id": f"github-{item_type}-{number}",
         "content": content,
         "context": context,
         "tags": tags,

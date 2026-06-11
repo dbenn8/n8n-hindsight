@@ -85,9 +85,10 @@ def format_release(release):
     branch = "v1 (legacy)" if is_v1 else "v2 (current)"
 
     return {
+        "document_id": f"release-{version}",
         "content": f"n8n Release {version}\nPublished: {published[:10]}\nBranch: {branch}\n\n{body}",
         "context": f"n8n release notes - {version} ({url})",
-        "tags": ["type:release-notes", "source:github", f"version:{version}"],
+        "tags": ["type:release-notes", "source:github-releases", f"version:{version}", "pipeline:doc_id"],
         "metadata": {
             "url": url,
             "version": version,

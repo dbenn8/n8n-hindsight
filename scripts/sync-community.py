@@ -163,9 +163,10 @@ def format_topic(t, content_data, category_tag):
         metadata["like_count"] = str(t["like_count"])
 
     return {
+        "document_id": f"community-{t['id']}",
         "content": content,
         "context": f"community.n8n.io - {t['title']} ({url})",
-        "tags": tags_list,
+        "tags": tags_list + ["pipeline:doc_id"],
         "metadata": metadata,
     }
 

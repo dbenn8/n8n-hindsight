@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Sync n8n official documentation to Hindsight via GitHub API.
-No local clone needed — fetches file list and content directly from GitHub.
+Sync n8n codebase files to Hindsight via GitHub API.
 
 Usage:
-    python3 sync-docs.py                  # incremental (only changed files)
-    python3 sync-docs.py --full           # re-ingest all docs
-    python3 sync-docs.py --dry-run        # show what would be synced
-    python3 sync-docs.py --test N         # sync only N files (for testing)
+    python3 sync-code.py                  # incremental (changed since last sync)
+    python3 sync-code.py --full           # re-ingest all files
+    python3 sync-code.py --surgical       # ingest only files NOT already in bank
+    python3 sync-code.py --dry-run        # show what would be synced
+    python3 sync-code.py --test N         # sync only N files (for testing)
 
-State tracked in SYNC_STATE_FILE (default: /data/sync-docs-state.json).
+State tracked in SYNC_CODE_STATE_FILE (default: /data/sync-code-state.json).
 """
 import base64
 import json
@@ -22,12 +22,17 @@ HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://127.0.0.1:8889")
 HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 BANK_ID = "n8n"
-REPO = "n8n-io/n8n-docs"
-STATE_FILE = os.environ.get("SYNC_DOCS_STATE_FILE", "/data/sync-docs-state.json")
+REPO = "n8n-io/n8n"
+STATE_FILE = os.environ.get("SYNC_CODE_STATE_FILE", "/data/sync-code-state.json")
 
-SKIP_DIRS = {"_extra", "_images", "_includes", "_macros", "_video", "_workflows", "integrations"}
-SKIP_FILES = {"docs/release-notes.md", "docs/release-notes/1-x.md"}
-DOCS_BASE_URL = "https://docs.n8n.io"
+INCLUDE_PACKAGES = ["cli", "core", "workflow", "@n8n"]
+INCLUDE_EXTENSIONS = {".ts", ".js", ".vue"}
+SKIP_PATTERNS = [
+    "node_modules", "dist", "__tests__", ".test.", ".spec.",
+    "test/", "tests/", ".d.ts", "coverage", ".stories.",
+]
+
+GITHUB_BASE = f"https://github.com/{REPO}/blob/master"
 
 
 def load_state():
@@ -54,17 +59,19 @@ def github_get(path):
 
 
 def should_include(filepath):
-    parts = filepath.split("/")
-    for part in parts:
-        if part in SKIP_DIRS:
-            return False
-    if filepath in SKIP_FILES:
+    if not any(filepath.startswith(f"packages/{pkg}/") for pkg in INCLUDE_PACKAGES):
         return False
-    return filepath.startswith("docs/") and filepath.endswith(".md")
+    _, ext = os.path.splitext(filepath)
+    if ext not in INCLUDE_EXTENSIONS:
+        return False
+    for skip in SKIP_PATTERNS:
+        if skip in filepath:
+            return False
+    return True
 
 
-def list_all_docs():
-    data = github_get(f"repos/{REPO}/git/trees/main?recursive=1")
+def list_all_files():
+    data = github_get(f"repos/{REPO}/git/trees/master?recursive=1")
     files = []
     for item in data.get("tree", []):
         if item["type"] == "blob" and should_include(item["path"]):
@@ -86,37 +93,54 @@ def get_changed_files(since_timestamp):
     return sorted(changed)
 
 
+def get_existing_filepaths():
+    existing = set()
+    offset = 0
+    while True:
+        url = f"{HINDSIGHT_URL}/v1/default/banks/{BANK_ID}/documents?tags=source:github-code&limit=100&offset={offset}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {HINDSIGHT_KEY}"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
+        except Exception:
+            break
+        items = data.get("items", [])
+        for d in items:
+            meta = d.get("document_metadata") or {}
+            fp = meta.get("filepath")
+            if fp:
+                existing.add(fp)
+        if len(items) < 100:
+            break
+        offset += 100
+    return existing
+
+
 def fetch_file_content(filepath):
     data = github_get(f"repos/{REPO}/contents/{filepath}")
     if data.get("encoding") == "base64":
-        return base64.b64decode(data["content"]).decode("utf-8")
+        return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
     return data.get("content", "")
 
 
-def strip_frontmatter(content):
-    if content.startswith("---"):
-        try:
-            end = content.index("---", 3)
-            return content[end + 3:].strip()
-        except ValueError:
-            pass
-    return content
-
-
-def format_doc(filepath, content):
-    content = strip_frontmatter(content)
-    if len(content) < 50:
+def format_file(filepath, content):
+    if len(content) < 10:
         return None
-    rel = filepath.replace("docs/", "", 1)
-    section = rel.split("/")[0] if "/" in rel else "general"
-    slug = rel.replace(".md", "").replace("/index", "")
-    url = f"{DOCS_BASE_URL}/{slug}/"
+
+    if len(content) > 8000:
+        content = content[:8000] + "\n\n... [truncated]"
+
+    parts = filepath.split("/")
+    package = parts[1] if len(parts) > 1 else "root"
+    url = f"{GITHUB_BASE}/{filepath}"
+    slug = filepath.replace("/", "-").replace(".", "-")
+
     return {
-        "document_id": f"docs-{slug}",
-        "content": content,
-        "context": f"n8n official documentation - {slug} ({url})",
-        "tags": ["type:docs", "source:n8n-docs", f"section:{section}", "pipeline:doc_id"],
-        "metadata": {"url": url, "section": section, "filepath": filepath},
+        "document_id": f"code-{slug}",
+        "content": f"n8n source code: {filepath}\n\n```\n{content}\n```",
+        "context": f"n8n codebase - {filepath} ({url})",
+        "tags": ["type:code", "source:github-code", f"package:{package}", "pipeline:doc_id"],
+        "metadata": {"url": url, "filepath": filepath, "package": package},
     }
 
 
@@ -137,6 +161,7 @@ def retain_batch(items):
 
 def main():
     full_run = "--full" in sys.argv
+    surgical = "--surgical" in sys.argv
     dry_run = "--dry-run" in sys.argv
     test_limit = None
     if "--test" in sys.argv:
@@ -149,15 +174,23 @@ def main():
 
     state = load_state()
     sync_start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    last_sync = None if (full_run or surgical) else state.get("last_sync")
 
-    if full_run or not state.get("last_sync"):
-        print("Full scan via tree API...", flush=True)
-        files = list_all_docs()
+    if last_sync:
+        print(f"Incremental: files changed since {last_sync}", flush=True)
+        files = get_changed_files(last_sync)
     else:
-        print(f"Incremental since {state['last_sync']}...", flush=True)
-        files = get_changed_files(state["last_sync"])
+        print("Full scan via tree API...", flush=True)
+        files = list_all_files()
 
-    print(f"Files to sync: {len(files)}", flush=True)
+    print(f"Files on GitHub: {len(files)}", flush=True)
+
+    if surgical:
+        print("Querying existing docs in bank...", flush=True)
+        existing = get_existing_filepaths()
+        before = len(files)
+        files = [f for f in files if f not in existing]
+        print(f"Surgical: {before} total - {len(existing)} in bank = {len(files)} to ingest", flush=True)
 
     if test_limit:
         files = files[:test_limit]
@@ -183,17 +216,22 @@ def main():
             print(f"  FETCH ERROR {filepath}: {e}", file=sys.stderr, flush=True)
             skipped += 1
             continue
-        item = format_doc(filepath, content)
+
+        item = format_file(filepath, content)
         if not item:
             skipped += 1
             continue
+
         batch.append(item)
+
         if len(batch) >= 5:
             if retain_batch(batch):
                 retained += len(batch)
             else:
                 failed += len(batch)
             batch = []
+            time.sleep(0.1)
+
         if (i + 1) % 50 == 0:
             print(f"  [{i + 1}/{len(files)}] retained={retained} skipped={skipped} failed={failed}", flush=True)
 
