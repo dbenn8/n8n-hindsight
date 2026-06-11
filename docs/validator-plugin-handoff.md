@@ -6,6 +6,7 @@ This repo now exposes a server-side n8n workflow validator endpoint intended for
 
 - Branch: `n8n-validator`
 - Endpoint: `POST /public/validate-workflow`
+- Health/metadata: `GET /public/validator-health`
 
 The route is proxied by nginx to the `ops-proxy` FastAPI service, which owns request parsing, extraction, response shaping, and repair-prompt generation.
 
@@ -71,6 +72,19 @@ The endpoint always returns the same high-level fields used locally:
 }
 ```
 
+Validation responses may also include:
+
+```json
+{
+  "validator_info": {
+    "validator_engine": "n8n-mcp",
+    "configured_n8n_mcp_version": "2.57.3",
+    "installed_n8n_mcp_version": "2.57.3",
+    "nodes_db_sha256": "..."
+  }
+}
+```
+
 Notes:
 
 - `repair_prompt` is included only when `original_prompt` is provided and `include_repair_prompt` is `true`.
@@ -123,6 +137,13 @@ The goal of the next session should be plugin-to-server validation coverage, not
 - `413` request body too large
 - `429` rate limited
 - `503` validator unavailable or startup/runtime failure
+
+## Validator Health
+
+Use `GET /public/validator-health` to confirm the active validator backend and
+its version metadata before starting large eval batches. In forward mode this
+route reports the downstream dedicated validator app's metadata rather than the
+main app's unrelated API health endpoint.
 
 ## Example Curl
 
