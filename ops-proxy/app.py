@@ -285,7 +285,7 @@ def create_app() -> FastAPI:
         return PlainTextResponse("\n".join(out) + ("\n" if out else ""))
 
     @app.post("/public/validate-workflow")
-    @limiter.limit("30/minute")
+    @limiter.limit(os.environ.get("WORKFLOW_VALIDATOR_RATE_LIMIT", "30/minute"))
     async def validate_workflow(request: Request):
         body = await request.body()
         if len(body) > _max_request_body_bytes():
