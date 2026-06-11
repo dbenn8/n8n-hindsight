@@ -18,10 +18,11 @@ import sys
 import time
 import urllib.request
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://127.0.0.1:8889")
-HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
+import sync_common
+
+HINDSIGHT_URL, HINDSIGHT_KEY = sync_common.resolve_env()
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-BANK_ID = "n8n"
+BANK_ID = sync_common.BANK_ID
 REPO = "n8n-io/n8n-docs"
 STATE_FILE = os.environ.get("SYNC_DOCS_STATE_FILE", "/data/sync-docs-state.json")
 
@@ -31,16 +32,11 @@ DOCS_BASE_URL = "https://docs.n8n.io"
 
 
 def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    return {}
+    return sync_common.load_state(STATE_FILE)
 
 
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+    sync_common.save_state(STATE_FILE, state)
 
 
 def github_get(path):
@@ -121,27 +117,14 @@ def format_doc(filepath, content):
 
 
 def retain_batch(items):
-    payload = json.dumps({"items": items, "async": True}).encode()
-    headers = {"Authorization": f"Bearer {HINDSIGHT_KEY}", "Content-Type": "application/json"}
-    req = urllib.request.Request(
-        f"{HINDSIGHT_URL}/v1/default/banks/{BANK_ID}/memories",
-        data=payload, headers=headers, method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return resp.status in (200, 201, 202)
-    except Exception as e:
-        print(f"  RETAIN ERROR: {e}", file=sys.stderr, flush=True)
-        return False
+    return sync_common.retain_batch(items, HINDSIGHT_URL, HINDSIGHT_KEY, BANK_ID)
 
 
 def main():
-    full_run = "--full" in sys.argv
-    dry_run = "--dry-run" in sys.argv
-    test_limit = None
-    if "--test" in sys.argv:
-        idx = sys.argv.index("--test")
-        test_limit = int(sys.argv[idx + 1]) if idx + 1 < len(sys.argv) else 5
+    args = sync_common.build_arg_parser().parse_known_args()[0]
+    full_run = args.full
+    dry_run = args.dry_run
+    test_limit = args.test
 
     if not HINDSIGHT_KEY:
         print("ERROR: HINDSIGHT_API_TENANT_API_KEY not set", file=sys.stderr)

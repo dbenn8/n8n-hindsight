@@ -24,9 +24,12 @@ import sys
 import time
 import urllib.request
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://127.0.0.1:8889")
-HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
-BANK_ID = "n8n"
+import sync_common
+
+HINDSIGHT_URL, HINDSIGHT_KEY = sync_common.resolve_env()
+BANK_ID = sync_common.BANK_ID
+# Resolution order is preserved: the workflow-specific env var wins, then the
+# generic STATE_FILE, then the hardcoded default.
 STATE_FILE = os.environ.get("SYNC_WORKFLOWS_STATE_FILE",
     os.environ.get("STATE_FILE", "/data/sync-workflows-state.json"))
 
@@ -34,16 +37,11 @@ TRIGGER_KEYWORDS = ["trigger", "webhook", "cron", "schedule", "start", "emailima
 
 
 def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    return {}
+    return sync_common.load_state(STATE_FILE)
 
 
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+    sync_common.save_state(STATE_FILE, state)
 
 
 def slugify(text):
@@ -258,18 +256,7 @@ def process_workflow(filepath):
 
 
 def retain_batch(items):
-    payload = json.dumps({"items": items, "async": True}).encode()
-    headers = {"Authorization": f"Bearer {HINDSIGHT_KEY}", "Content-Type": "application/json"}
-    req = urllib.request.Request(
-        f"{HINDSIGHT_URL}/v1/default/banks/{BANK_ID}/memories",
-        data=payload, headers=headers, method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return resp.status in (200, 201, 202)
-    except Exception as e:
-        print(f"  RETAIN ERROR: {e}", file=sys.stderr, flush=True)
-        return False
+    return sync_common.retain_batch(items, HINDSIGHT_URL, HINDSIGHT_KEY, BANK_ID)
 
 
 def find_workflow_dir():
@@ -288,15 +275,14 @@ def find_workflow_dir():
 
 
 def main():
-    full_run = "--full" in sys.argv
-    dry_run = "--dry-run" in sys.argv
-    test_limit = None
+    args = sync_common.build_arg_parser().parse_known_args()[0]
+    full_run = args.full
+    dry_run = args.dry_run
+    test_limit = args.test
     workflow_dir = None
 
-    if "--test" in sys.argv:
-        idx = sys.argv.index("--test")
-        test_limit = int(sys.argv[idx + 1]) if idx + 1 < len(sys.argv) else 5
-
+    # --dir is parsed manually to preserve the original explicit error message
+    # and exit(1) when the path argument is missing.
     if "--dir" in sys.argv:
         idx = sys.argv.index("--dir")
         if idx + 1 < len(sys.argv):

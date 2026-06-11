@@ -24,26 +24,22 @@ import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
 
-REPO = "n8n-io/n8n"
-BANK_ID = "n8n"
+import sync_common
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://127.0.0.1:8889")
-HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
+REPO = "n8n-io/n8n"
+BANK_ID = sync_common.BANK_ID
+
+HINDSIGHT_URL, HINDSIGHT_KEY = sync_common.resolve_env()
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STATE_FILE = os.environ.get("SYNC_STATE_FILE", "/data/sync-state.json")
 
 
 def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    return {}
+    return sync_common.load_state(STATE_FILE)
 
 
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+    sync_common.save_state(STATE_FILE, state)
 
 
 def github_api(path, params=None):
@@ -212,27 +208,16 @@ def format_item(item, item_type):
 
 def retain_batch(items):
     """Retain a batch of items to Hindsight via urllib (no aiohttp dependency)."""
-    payload = json.dumps({"items": items, "async": True}).encode()
-    headers = {
-        "Authorization": f"Bearer {HINDSIGHT_KEY}",
-        "Content-Type": "application/json",
-    }
-    req = urllib.request.Request(
-        f"{HINDSIGHT_URL}/v1/default/banks/{BANK_ID}/memories",
-        data=payload,
-        headers=headers,
-        method="POST",
+    # flush=False preserves this script's original stderr behavior (the other
+    # sync scripts flush their RETAIN ERROR line; sync-github historically did
+    # not).
+    return sync_common.retain_batch(
+        items, HINDSIGHT_URL, HINDSIGHT_KEY, BANK_ID, flush=False
     )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return resp.status in (200, 201, 202)
-    except Exception as e:
-        print(f"  RETAIN ERROR: {e}", file=sys.stderr)
-        return False
 
 
 def ingest(formatted_items):
-    batch_size = 5
+    batch_size = sync_common.BATCH_SIZE
     success = 0
     failed = 0
 
@@ -259,12 +244,12 @@ def load_exclude_set(path):
 
 
 def main():
-    full_run = "--full" in sys.argv
-    dry_run = "--dry-run" in sys.argv
-    exclude_file = None
-    if "--exclude-file" in sys.argv:
-        idx = sys.argv.index("--exclude-file")
-        exclude_file = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
+    parser = sync_common.build_arg_parser(test=False)
+    parser.add_argument("--exclude-file", default=None)
+    args = parser.parse_known_args()[0]
+    full_run = args.full
+    dry_run = args.dry_run
+    exclude_file = args.exclude_file
 
     if not HINDSIGHT_KEY:
         print("ERROR: HINDSIGHT_API_TENANT_API_KEY not set", file=sys.stderr)

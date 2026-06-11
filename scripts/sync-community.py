@@ -13,9 +13,10 @@ import time
 import urllib.request
 from html.parser import HTMLParser
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://127.0.0.1:8889")
-HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
-BANK_ID = "n8n"
+import sync_common
+
+HINDSIGHT_URL, HINDSIGHT_KEY = sync_common.resolve_env()
+BANK_ID = sync_common.BANK_ID
 BASE_URL = "https://community.n8n.io"
 STATE_FILE = os.environ.get("SYNC_COMMUNITY_STATE_FILE", "/data/sync-community-state.json")
 
@@ -61,16 +62,11 @@ def strip_html(html):
 
 
 def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    return {}
+    return sync_common.load_state(STATE_FILE)
 
 
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+    sync_common.save_state(STATE_FILE, state)
 
 
 def discourse_get(path):
@@ -172,18 +168,7 @@ def format_topic(t, content_data, category_tag):
 
 
 def retain_batch(items):
-    payload = json.dumps({"items": items, "async": True}).encode()
-    headers = {"Authorization": f"Bearer {HINDSIGHT_KEY}", "Content-Type": "application/json"}
-    req = urllib.request.Request(
-        f"{HINDSIGHT_URL}/v1/default/banks/{BANK_ID}/memories",
-        data=payload, headers=headers, method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return resp.status in (200, 201, 202)
-    except Exception as e:
-        print(f"  RETAIN ERROR: {e}", file=sys.stderr, flush=True)
-        return False
+    return sync_common.retain_batch(items, HINDSIGHT_URL, HINDSIGHT_KEY, BANK_ID)
 
 
 def main():

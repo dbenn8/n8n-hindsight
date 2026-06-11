@@ -27,46 +27,31 @@ import sys
 import time
 import urllib.request
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://127.0.0.1:8889")
-HINDSIGHT_KEY = os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
-BANK_ID = "n8n"
+import sync_common
+
+HINDSIGHT_URL, HINDSIGHT_KEY = sync_common.resolve_env()
+BANK_ID = sync_common.BANK_ID
 STATE_FILE = os.environ.get("STATE_FILE", "/data/sync-nodes-state.json")
 
 SPLIT_THRESHOLD = 12000
 PROPERTIES_JSON_CAP = 9000
-BATCH_SIZE = 5
+BATCH_SIZE = sync_common.BATCH_SIZE
 
 
 # --- State management ---
 
 def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    return {}
+    return sync_common.load_state(STATE_FILE)
 
 
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE) or ".", exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+    sync_common.save_state(STATE_FILE, state)
 
 
 # --- Hindsight API ---
 
 def retain_batch(items):
-    payload = json.dumps({"items": items, "async": True}).encode()
-    headers = {"Authorization": f"Bearer {HINDSIGHT_KEY}", "Content-Type": "application/json"}
-    req = urllib.request.Request(
-        f"{HINDSIGHT_URL}/v1/default/banks/{BANK_ID}/memories",
-        data=payload, headers=headers, method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return resp.status in (200, 201, 202)
-    except Exception as e:
-        print(f"  RETAIN ERROR: {e}", file=sys.stderr, flush=True)
-        return False
+    return sync_common.retain_batch(items, HINDSIGHT_URL, HINDSIGHT_KEY, BANK_ID)
 
 
 # --- Integration service name ---
@@ -544,16 +529,15 @@ def generate_lookup(db_path, output_path):
 # --- Main ---
 
 def main():
-    full_run = "--full" in sys.argv
-    dry_run = "--dry-run" in sys.argv
-    test_limit = None
+    args = sync_common.build_arg_parser().parse_known_args()[0]
+    full_run = args.full
+    dry_run = args.dry_run
+    test_limit = args.test
     db_path = None
     refresh_lookup_path = None
 
-    if "--test" in sys.argv:
-        idx = sys.argv.index("--test")
-        test_limit = int(sys.argv[idx + 1]) if idx + 1 < len(sys.argv) else 5
-
+    # --db and --refresh-lookup are parsed manually from raw argv to preserve
+    # the original "missing value -> None" behavior (no argparse error).
     if "--db" in sys.argv:
         idx = sys.argv.index("--db")
         db_path = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
