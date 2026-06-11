@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,31 @@ def _sha256_file(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _nodes_content_sha256(path: Path) -> str | None:
+    """Stable content hash of the nodes table.
+
+    The physical nodes.db file mutates during normal n8n-mcp use (SQLite change
+    counter, freed pages, FTS internals) without the node data changing, so a
+    whole-file hash produces false mismatches between a fresh install and a
+    used one. Hashing the ordered rows of the nodes table compares the data
+    that actually drives validation. Must stay byte-identical with
+    n8n-knowledge hooks/lib/validator_metadata.py:_nodes_content_sha256.
+    """
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        digest = hashlib.sha256()
+        for row in db.execute("SELECT * FROM nodes ORDER BY node_type"):
+            digest.update(repr(row).encode("utf-8"))
+        return digest.hexdigest()
+    except sqlite3.Error:
+        return None
+    finally:
+        db.close()
+
+
 def get_validator_metadata() -> dict[str, Any]:
     script_dir = _script_dir()
     configured_package = _read_json_file(script_dir / "package.json") or {}
@@ -71,6 +97,7 @@ def get_validator_metadata() -> dict[str, Any]:
         _read_json_file(install_root / "package.json") if install_root is not None else None
     ) or {}
     nodes_db_path = install_root / "data" / "nodes.db" if install_root is not None else None
+    nodes_db_exists = nodes_db_path is not None and nodes_db_path.is_file()
 
     return {
         "validator_engine": "n8n-mcp",
@@ -78,10 +105,9 @@ def get_validator_metadata() -> dict[str, Any]:
             configured_package.get("dependencies", {}) or {}
         ).get("n8n-mcp"),
         "installed_n8n_mcp_version": installed_package.get("version"),
-        "nodes_db_sha256": (
-            _sha256_file(nodes_db_path)
-            if nodes_db_path is not None and nodes_db_path.is_file()
-            else None
+        "nodes_db_sha256": _sha256_file(nodes_db_path) if nodes_db_exists else None,
+        "nodes_content_sha256": (
+            _nodes_content_sha256(nodes_db_path) if nodes_db_exists else None
         ),
     }
 
