@@ -1,5 +1,12 @@
 .env
+.DS_Store
+.tmp/
+.claude/
+.worktrees/
 __pycache__/
 *.pyc
+.pytest_cache/
 n8n-all-docs.json
 n8n-duplicates.json
+n8n-docs-export.json
+existing-*.json
