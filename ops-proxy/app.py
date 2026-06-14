@@ -2,10 +2,12 @@
 import asyncio
 from contextlib import asynccontextmanager
 from functools import wraps
+import hashlib
 import hmac
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -72,8 +74,75 @@ _MAX_LINES = 10_000
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 1_048_576
 _DEFAULT_FORWARD_TIMEOUT_SECONDS = 30
 _DEFAULT_FORWARD_HEALTH_TIMEOUT_SECONDS = 5
+_DEFAULT_MANIFEST_CACHE_TTL_SECONDS = 300
 
 limiter = Limiter(key_func=get_remote_address)
+
+_manifest_cache: dict | None = None
+_manifest_cache_at: float = 0
+
+
+def _hindsight_api_url() -> str:
+    return os.environ.get("HINDSIGHT_API_URL", "http://127.0.0.1:8889")
+
+
+def _hindsight_api_key() -> str:
+    return os.environ.get("HINDSIGHT_API_TENANT_API_KEY", "")
+
+
+def _manifest_cache_ttl() -> int:
+    raw = os.environ.get("MANIFEST_CACHE_TTL_SECONDS", "")
+    try:
+        return int(raw) if raw else _DEFAULT_MANIFEST_CACHE_TTL_SECONDS
+    except ValueError:
+        return _DEFAULT_MANIFEST_CACHE_TTL_SECONDS
+
+
+async def _build_mental_model_manifest() -> dict:
+    global _manifest_cache, _manifest_cache_at
+
+    now = time.monotonic()
+    if _manifest_cache and (now - _manifest_cache_at) < _manifest_cache_ttl():
+        return _manifest_cache
+
+    api_url = _hindsight_api_url()
+    api_key = _hindsight_api_key()
+    bank_id = os.environ.get("MENTAL_MODEL_BANK_ID", "n8n")
+    url = f"{api_url}/v1/default/banks/{bank_id}/mental-models?detail=content"
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    req = urllib.request.Request(url, headers=headers, method="GET")
+
+    def _fetch() -> dict:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    data = await asyncio.to_thread(_fetch)
+    items = data.get("items", [])
+
+    models = {}
+    for item in items:
+        tags = item.get("tags", [])
+        tag = next((t.replace("tag:", "") for t in tags if t.startswith("tag:")), None)
+        if not tag:
+            continue
+        content = item.get("content") or ""
+        if not content or content == "Generating content...":
+            continue
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        models[tag] = {
+            "content_hash": content_hash,
+            "size": len(content),
+            "last_refreshed_at": item.get("last_refreshed_at"),
+        }
+
+    manifest = {"models": models}
+    _manifest_cache = manifest
+    _manifest_cache_at = now
+    return manifest
 
 
 def _max_request_body_bytes() -> int:
@@ -283,6 +352,15 @@ def create_app() -> FastAPI:
         if lines > 0:
             out = out[-lines:]
         return PlainTextResponse("\n".join(out) + ("\n" if out else ""))
+
+    @app.get("/public/mental-models/manifest")
+    @limiter.limit("60/minute")
+    async def mental_model_manifest(request: Request):
+        try:
+            manifest = await _build_mental_model_manifest()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Failed to build manifest: {exc}")
+        return manifest
 
     @app.post("/public/validate-workflow")
     @limiter.limit(os.environ.get("WORKFLOW_VALIDATOR_RATE_LIMIT", "30/minute"))
