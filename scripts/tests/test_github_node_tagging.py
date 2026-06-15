@@ -96,3 +96,15 @@ def test_engagement_floor_boundary_inclusive():
 
 def test_floor_constant_is_five():
     assert _load_sync_github().RETAIN_ENGAGEMENT_FLOOR == 5
+
+
+def test_detects_on_title_only_not_body():
+    # Title names the subject node (merge); body lists OTHER nodes from the
+    # user's workflow. Body nodes must NOT be tagged (real dry-run showed bodies
+    # over-tag and can crowd out the real node under the cap).
+    tags = _node_tags(_issue(
+        "Merge node loses rows in combine mode",
+        body="my workflow uses the Postgres node, the Asana node and a Slack node",
+        reactions=2, comments=2,
+    ))
+    assert tags == ["node:merge"]

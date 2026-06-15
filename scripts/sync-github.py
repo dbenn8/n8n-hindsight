@@ -55,8 +55,16 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STATE_FILE = os.environ.get("SYNC_STATE_FILE", "/data/sync-state.json")
 
 
-def detect_node_tags(title, body, reactions_total, comments):
+def detect_node_tags(title, reactions_total, comments):
     """Return engagement-gated node:X tags for an item.
+
+    Detect on the TITLE ONLY. A real dry-run (2026-06-15) showed issue BODIES are
+    too noisy to tag from: users paste whole workflows, stack traces and node
+    lists, so body-detection over-tags (e.g. a Wait-node bug whose body lists
+    asana/postgres/github crowded out node:wait under the cap). The title
+    reliably names the subject node ("Wait node hangs…", "OpenAI credential
+    fails…"). Precision over recall: a mis-tag re-adds the cross-node noise this
+    effort removes, while a vague-title miss still gets semantic (Tier 2) recall.
 
     Empty when detection is unavailable, engagement is below the floor, or no
     node is confidently detected. The same node_lookup the plugin uses, so the
@@ -67,7 +75,7 @@ def detect_node_tags(title, body, reactions_total, comments):
     if reactions_total + comments * 4 < RETAIN_ENGAGEMENT_FLOOR:
         return []
     seen, tags = set(), []
-    for _, node_type in identify_nodes(f"{title} {body}"):
+    for _, node_type in identify_nodes(title):
         tag = community_tag(node_type)
         if tag and tag not in seen:
             seen.add(tag)
@@ -226,8 +234,9 @@ def format_item(item, item_type):
         tags.append("state:closed")
 
     # Engagement-gated node:X tags so gotcha recall can find this item by node.
+    # Detect on the title only (bodies are too noisy — see detect_node_tags).
     tags.extend(detect_node_tags(
-        title, body,
+        title,
         int(reactions.get("total_count", 0) or 0),
         int(item.get("comments", 0) or 0),
     ))
