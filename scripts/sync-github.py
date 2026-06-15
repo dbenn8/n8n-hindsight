@@ -19,6 +19,7 @@ Env vars:
 import asyncio
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.parse
@@ -46,6 +47,22 @@ except Exception as _e:  # pragma: no cover - defensive
 # knob, tune/roll back freely.
 RETAIN_ENGAGEMENT_FLOOR = 5
 MAX_NODE_TAGS = 5  # cap per item — avoid tag spam on issues that name many nodes
+
+# JS-error phrasings whose embedded node-name tokens are noise, not the subject
+# node. "X is not a function" carries the word "function" -> the deprecated
+# Function node, which floods node:function across unrelated error-titled issues.
+# Strip the PHRASE here (ingest only) rather than demoting the word in the shared
+# detector — real titles like "Function node throws error" still detect it, and
+# the recall/prompt side never sees this phrasing. Add patterns as needed.
+_TITLE_NOISE_PATTERNS = [
+    re.compile(r"\bis\s+not\s+a\s+function\b", re.IGNORECASE),
+]
+
+
+def _strip_title_noise(title):
+    for pat in _TITLE_NOISE_PATTERNS:
+        title = pat.sub(" ", title)
+    return title
 
 REPO = "n8n-io/n8n"
 BANK_ID = sync_common.BANK_ID
@@ -75,7 +92,7 @@ def detect_node_tags(title, reactions_total, comments):
     if reactions_total + comments * 4 < RETAIN_ENGAGEMENT_FLOOR:
         return []
     seen, tags = set(), []
-    for _, node_type in identify_nodes(title):
+    for _, node_type in identify_nodes(_strip_title_noise(title)):
         tag = community_tag(node_type)
         if tag and tag not in seen:
             seen.add(tag)

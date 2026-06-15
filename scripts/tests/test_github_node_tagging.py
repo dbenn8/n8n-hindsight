@@ -98,6 +98,26 @@ def test_floor_constant_is_five():
     assert _load_sync_github().RETAIN_ENGAGEMENT_FLOOR == 5
 
 
+def test_js_error_phrase_does_not_tag_function_node():
+    # "X is not a function" carries the word "function" (deprecated node) — strip
+    # the phrase so it doesn't flood node:function. The real subject node (wait)
+    # from the title is still tagged.
+    tags = _node_tags(_issue(
+        "Wait Node: context.getNodeParameter is not a function",
+        reactions=2, comments=4,
+    ))
+    assert "node:function" not in tags
+    assert "node:wait" in tags
+
+
+def test_function_node_still_tagged_when_genuine():
+    # The strip is surgical (phrase, not word): a genuine Function-node title
+    # still detects node:function.
+    tags = _node_tags(_issue("Function node throws on large input",
+                             reactions=2, comments=2))
+    assert "node:function" in tags
+
+
 def test_detects_on_title_only_not_body():
     # Title names the subject node (merge); body lists OTHER nodes from the
     # user's workflow. Body nodes must NOT be tagged (real dry-run showed bodies
