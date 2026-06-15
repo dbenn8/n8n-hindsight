@@ -36,6 +36,10 @@ import sync_common
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 try:
     from node_lookup import identify_nodes, community_tag
+    # Force the lazy node_lookup_data.json load NOW so a missing/corrupt data
+    # file fails here (caught -> tags skipped) instead of mid-sync inside
+    # format_item, which would abort the whole run.
+    identify_nodes("warmup")
     _NODE_DETECT = True
 except Exception as _e:  # pragma: no cover - defensive
     print(f"  WARN: node_lookup unavailable, skipping node:X tags ({_e})", file=sys.stderr)
@@ -215,18 +219,28 @@ def fetch_closed_issues(target_total, open_count):
 
 
 def fetch_prs(since=None):
-    """Fetch open PRs with descriptions updated since timestamp."""
+    """Fetch open PRs (with descriptions) updated since timestamp.
+
+    Source PRs from the /issues endpoint, NOT /pulls. The /pulls LIST
+    representation omits `comments` and `reactions`, which silently zeroed every
+    PR's engagement and made it fail the node-tagging floor (a PR could never be
+    node-tagged). The /issues representation of a PR (it carries a
+    `pull_request` key) DOES include `comments` and `reactions`, so engagement is
+    accurate. /issues also honors `since` server-side.
+    """
     print(f"Fetching PRs{f' since {since}' if since else ' (full)'}...")
     params = {"state": "open", "per_page": "100", "sort": "updated", "direction": "desc"}
+    if since:
+        params["since"] = since
 
-    all_prs = github_api(f"repos/{REPO}/pulls", params)
+    all_items = github_api(f"repos/{REPO}/issues", params)
     prs = []
-    for pr in all_prs:
-        if not pr.get("body"):
+    for it in all_items:
+        if "pull_request" not in it:  # keep only PRs; plain issues are handled elsewhere
             continue
-        if since and pr.get("updated_at", "") <= since:
+        if not it.get("body"):
             continue
-        prs.append(pr)
+        prs.append(it)
     print(f"  Fetched {len(prs)} PRs")
     return prs
 
