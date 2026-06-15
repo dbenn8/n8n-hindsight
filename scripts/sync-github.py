@@ -26,12 +26,55 @@ from datetime import datetime, timezone
 
 import sync_common
 
+# Node detection for node:X tagging — the SINGLE canonical detector, vendored
+# byte-identical from n8n-knowledge (scripts/lib/node_lookup.py; see its header
+# for the do-not-fork / parity rule). community_tag() produces the exact same
+# node:<tag> string that the plugin's do_gotcha_recall QUERIES, so recall finds
+# what we WRITE. Best-effort: if the import fails, the sync still runs without
+# node tags rather than breaking ingestion.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+try:
+    from node_lookup import identify_nodes, community_tag
+    _NODE_DETECT = True
+except Exception as _e:  # pragma: no cover - defensive
+    print(f"  WARN: node_lookup unavailable, skipping node:X tags ({_e})", file=sys.stderr)
+    _NODE_DETECT = False
+
+# Engagement floor: only node-tag items with real community engagement so
+# low-signal noise isn't promoted in gotcha recall. engagement = reactions_total
+# + comments*4 (matches format_results.py). Dan set 5 on 2026-06-15 — one-line
+# knob, tune/roll back freely.
+RETAIN_ENGAGEMENT_FLOOR = 5
+MAX_NODE_TAGS = 5  # cap per item — avoid tag spam on issues that name many nodes
+
 REPO = "n8n-io/n8n"
 BANK_ID = sync_common.BANK_ID
 
 HINDSIGHT_URL, HINDSIGHT_KEY = sync_common.resolve_env()
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STATE_FILE = os.environ.get("SYNC_STATE_FILE", "/data/sync-state.json")
+
+
+def detect_node_tags(title, body, reactions_total, comments):
+    """Return engagement-gated node:X tags for an item.
+
+    Empty when detection is unavailable, engagement is below the floor, or no
+    node is confidently detected. The same node_lookup the plugin uses, so the
+    tags written here match the tags recall queries (the tag<->query contract).
+    """
+    if not _NODE_DETECT:
+        return []
+    if reactions_total + comments * 4 < RETAIN_ENGAGEMENT_FLOOR:
+        return []
+    seen, tags = set(), []
+    for _, node_type in identify_nodes(f"{title} {body}"):
+        tag = community_tag(node_type)
+        if tag and tag not in seen:
+            seen.add(tag)
+            tags.append(f"node:{tag}")
+            if len(tags) >= MAX_NODE_TAGS:
+                break
+    return tags
 
 
 def load_state():
@@ -181,6 +224,13 @@ def format_item(item, item_type):
         tags.append(f"label:{label}")
     if state == "closed":
         tags.append("state:closed")
+
+    # Engagement-gated node:X tags so gotcha recall can find this item by node.
+    tags.extend(detect_node_tags(
+        title, body,
+        int(reactions.get("total_count", 0) or 0),
+        int(item.get("comments", 0) or 0),
+    ))
 
     metadata = {
         "url": url,
