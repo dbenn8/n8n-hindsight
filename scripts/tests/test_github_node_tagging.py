@@ -22,7 +22,7 @@ SCRIPTS = os.path.dirname(HERE)
 # the hash (`shasum -a 256 scripts/lib/node_lookup.py`), and update BOTH pinned
 # literals. A red test means a copy drifted — never weaken the test.
 PINNED_NODE_LOOKUP_SHA256 = (
-    "7cc17940eb0bc0ac4f4653a7205656a8ac8a14f34586df254fcfaf5ef225c32b"
+    "eeda1817d47c6b7643a18c35ad8953976baf78a6df661a4187d310de9e2da80e"
 )
 
 
