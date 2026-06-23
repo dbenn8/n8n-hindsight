@@ -5,7 +5,7 @@ Claude Code plugin. It does two things:
 
 1. **Knowledge service** — a sync pipeline that ingests n8n's docs, GitHub, community forum,
    releases, source code, node specs, and workflow examples into a
-   [Hindsight](https://hindsight.vectorize.io) graph-memory bank (bank id `n8n`, **245k+
+   [Hindsight](https://hindsight.vectorize.io) graph-memory bank (bank id `n8n`, **436k+
    memories**), fronted by an **ops-proxy** (FastAPI) and **nginx** that expose hardened,
    rate-limited public endpoints.
 2. **Workflow validator** — a stateless microservice (see
@@ -34,7 +34,7 @@ flowchart TD
         NGINX["nginx<br/>rate limits + key injection"]
         OPS["ops-proxy (FastAPI)<br/>validate-workflow forward, /logs"]
         API["Hindsight API<br/>local embeddings, pgvector"]
-        BANK[("Hindsight bank: n8n<br/>245k+ memories")]
+        BANK[("Hindsight bank: n8n<br/>436k+ memories")]
     end
 
     VAL["validator-app (separate Appliku app)<br/>n8nvalidator.applikuapp.com<br/>wraps n8n-mcp engine"]
