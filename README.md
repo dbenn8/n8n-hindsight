@@ -51,7 +51,7 @@ flowchart TD
     NGINX -->|/public/recall, /public/stats| API
     NGINX -->|/public/validate-workflow| OPS
     NGINX -->|/public/validator-health| OPS
-    NGINX -->|/logs (key-gated)| OPS
+    NGINX -->|"/logs (key-gated)"| OPS
     OPS -->|WORKFLOW_VALIDATOR_FORWARD_URL| VAL
 ```
 
