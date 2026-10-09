@@ -80,7 +80,8 @@ databases:
 
 services:
   web:
-    command: "supervisord -c /etc/supervisord.conf"
+    # start.sh decodes *_B64 config values (Appliku escapes quotes in values) and then execs supervisord.
+    command: "/usr/local/bin/start.sh"
 
 cronjobs:
   github-sync:
