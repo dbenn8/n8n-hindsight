@@ -44,10 +44,24 @@ def resolve_env():
 
 
 def load_state(state_file):
-    """Load the JSON state dict from ``state_file`` ('{}' if it doesn't exist)."""
+    """Load the JSON state dict from ``state_file`` ('{}' if it doesn't exist).
+
+    An empty or corrupt file is treated as no state, so the sync does a full
+    run instead of crashing. From 2026-08-22 to 2026-10-09 the docs, community
+    and releases crons died every night on zero-byte state files left by an
+    interrupted write (JSONDecodeError at the first line of the script).
+    """
     if os.path.exists(state_file):
         with open(state_file) as f:
-            return json.load(f)
+            raw = f.read()
+        if not raw.strip():
+            print(f"WARNING: state file {state_file} is empty; treating as no state", flush=True)
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"WARNING: state file {state_file} is not valid JSON ({e}); treating as no state", flush=True)
+            return {}
     return {}
 
 
