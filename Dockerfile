@@ -50,8 +50,9 @@ COPY nginx.conf /etc/nginx/nginx.conf.template
 COPY start-nginx.sh /usr/local/bin/start-nginx.sh
 COPY supervisord.conf /etc/supervisord.conf
 COPY scripts/ /app/scripts/
+COPY start.sh /usr/local/bin/start.sh
 
-RUN chmod +x /usr/local/bin/start-nginx.sh \
+RUN chmod +x /usr/local/bin/start-nginx.sh /usr/local/bin/start.sh \
     && mkdir -p /var/log/nginx /var/lib/nginx /run \
     && chown -R hindsight:hindsight /var/log/nginx /var/lib/nginx /run /etc/nginx
 
@@ -66,4 +67,4 @@ RUN pip install --no-cache-dir -r /opt/ops-proxy/requirements.txt
 
 USER hindsight
 
-CMD ["supervisord", "-c", "/etc/supervisord.conf"]
+CMD ["/usr/local/bin/start.sh"]
