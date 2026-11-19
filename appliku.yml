@@ -68,6 +68,12 @@ build_settings:
     # that a deploy re-applies -1; a value above 0 makes the maintenance sweep delete old rows.
     - name: HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS
       value: "-1"
+    # Privacy (2026-11-19): Hindsight 1.x records each model call in the llm_requests table,
+    # with its input. For a recall, the query-embedding call has the user prompt as input. These
+    # scopes are the model calls that a recall can make; they must not be traced. Do not remove
+    # them. Tracing of retain and consolidation calls stays on (owner data only).
+    - name: HINDSIGHT_API_LLM_TRACE_EXCLUDE_SCOPES
+      value: "embedding_query,rerank,decision_recall_rerank,decision_recall_dedup"
     - name: HINDSIGHT_CP_DATAPLANE_API_URL
       value: "http://127.0.0.1:8889"
     - name: HINDSIGHT_CP_DATAPLANE_API_KEY

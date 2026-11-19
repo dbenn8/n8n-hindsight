@@ -1,4 +1,4 @@
-FROM ghcr.io/vectorize-io/hindsight-api:latest-slim
+FROM ghcr.io/vectorize-io/hindsight-api:1.2.2-slim
 
 USER root
 
