@@ -63,9 +63,11 @@ build_settings:
     # dashboard value. Check after each deploy: scripts/privacy_marker_test.sh must print PASS.
     - name: HINDSIGHT_API_AUDIT_LOG_ACTIONS
       value: "batch_retain,retain,delete_document,consolidation,graph_maintenance,refresh_mental_model,create_mental_model,delete_mental_model,retry_operation,cancel_operation,update_bank_config,create_bank,delete_bank,recover_consolidation,delete_directive,reflect"
-    # Audit rows older than 30 days are deleted by the maintenance sweep.
+    # Audit retention: -1 = keep forever. No automatic delete of audit rows (owner decision
+    # 2026-11-19: the history of the owner's own actions is kept). Declared here on purpose, so
+    # that a deploy re-applies -1; a value above 0 makes the maintenance sweep delete old rows.
     - name: HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS
-      value: "30"
+      value: "-1"
     - name: HINDSIGHT_CP_DATAPLANE_API_URL
       value: "http://127.0.0.1:8889"
     - name: HINDSIGHT_CP_DATAPLANE_API_KEY
