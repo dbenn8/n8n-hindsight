@@ -46,3 +46,62 @@ def test_rotation_creates_capped_backups(tmp_path):
     assert (tmp_path / "x.log.2").exists()
     # backupCount=2 -> never a .3
     assert not (tmp_path / "x.log.3").exists()
+
+
+# --- query-text redaction (privacy): the API logs the first 50 chars of each
+# recall/reflect query; logwriter must remove that text from BOTH outputs. ---
+
+TS = "2026-11-19 15:15:25,040 - INFO - hindsight_api.engine.memory_engine - "
+
+
+def _run(lines, tmp_path):
+    out = tmp_path / "x.log"
+    echo = io.StringIO()
+    logwriter.run(lines, str(out), max_bytes=100_000, backups=1, drops=[], echo=echo)
+    return echo.getvalue(), out.read_text()
+
+
+def test_redacts_recall_start_query_in_stdout_and_file(tmp_path):
+    echo, text = _run([TS + "[RECALL n8n] Starting recall for query: SECRETPROMPT how do I... (tags=a)"], tmp_path)
+    for got in (echo, text):
+        assert "SECRETPROMPT" not in got
+        assert "[RECALL n8n] Starting recall for query: [redacted]" in got
+
+
+def test_redacts_recall_query_line_and_keeps_budget_suffix(tmp_path):
+    echo, text = _run(["[RECALL n8n-25086-0e20e8] Query: 'SECRETPROMPT it's a test...' (budget=mid, max_tokens=4096)"], tmp_path)
+    for got in (echo, text):
+        assert "SECRETPROMPT" not in got and "it's a test" not in got
+        assert "[RECALL n8n-25086-0e20e8] Query: '[redacted]' (budget=mid, max_tokens=4096)" in got
+
+
+def test_redacts_reflect_start_and_timeout_lines(tmp_path):
+    echo, text = _run([
+        TS + "[REFLECT ab12] Starting agentic reflect for query: SECRETPROMPT one...",
+        TS + "[REFLECT ab12] Wall-clock timeout after 30.0s (limit: 30s) for query: SECRETPROMPT two...",
+    ], tmp_path)
+    for got in (echo, text):
+        assert "SECRETPROMPT" not in got
+        assert got.count("for query: [redacted]") == 2
+
+
+def test_drops_continuation_lines_of_a_multiline_query(tmp_path):
+    echo, text = _run([
+        TS + "[RECALL n8n] Starting recall for query: SECRETPROMPT first line",
+        "second line of the SECRETPROMPT",
+        "third line... (tags=a)",
+        "[RECALL n8n-25086-0e20e8] Query: 'SECRETPROMPT first line",
+        "second line of the SECRETPROMPT...' (budget=mid, max_tokens=4096)",
+        "  [1] Generate query embedding: 0.01s",
+        TS + "next record",
+    ], tmp_path)
+    for got in (echo, text):
+        assert "SECRETPROMPT" not in got and "second line" not in got and "third line" not in got
+        assert "  [1] Generate query embedding: 0.01s" in got
+        assert "next record" in got
+
+
+def test_lines_without_query_text_are_unchanged(tmp_path):
+    lines = [TS + "[RECALL n8n-1] Complete: 12 results", "10.0.0.1 - - [19/Nov/2026:15:15:25 +0000] \"POST /public/recall HTTP/1.1\" 200 12", "  [2] Parallel retrieval (4 fact_types)"]
+    echo, text = _run(lines, tmp_path)
+    assert echo.splitlines() == lines and text.splitlines() == lines

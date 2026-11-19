@@ -1,4 +1,4 @@
-"""Read stdin; echo EVERY line to stdout (so supervisord/Appliku keep the full
+"""Read stdin; echo EVERY line (query text redacted, see redact()) to stdout (so supervisord/Appliku keep the full
 live view, heartbeat included), and write the lines that do NOT match any --drop
 regex to a size-rotated durable file. Pure stdlib; used by logpipe.sh.
 
@@ -10,6 +10,41 @@ import logging.handlers
 import os
 import re
 import sys
+
+
+# --- Query-text redaction (privacy) -----------------------------------------
+# The Hindsight API logs the first 50 characters of each recall/reflect query:
+#   "... Starting recall for query: <text>...<tags>"
+#   "[RECALL <id>] Query: '<text>...' (budget=..., max_tokens=...)"
+#   "... Starting agentic reflect for query: <text>..."
+#   "... Wall-clock timeout ... for query: <text>..."
+# That text is user prompt content. It must not reach stdout (Docker log) or the
+# durable file, so redact() removes it from BOTH outputs. A query can hold line
+# breaks; the lines that follow a redacted line are dropped until the next line
+# with a known log shape.
+REDACTED = "[redacted]"
+_FOR_QUERY = re.compile(r"\bfor query: ")
+_QUERY_QUOTE = re.compile(r"\] Query: '")
+_BUDGET_SUFFIX = re.compile(r"' \(budget=[\w.]+, max_tokens=\d+[^']*\)$")
+_KNOWN_SHAPE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} - "   # python logging record
+    r"|\[[A-Z_]+ [^\]]*\] "                               # [RECALL id] / [REFLECT id]
+    r"|  \["                                               # "  [1] ..." phase lines
+    r"|\d{1,3}(?:\.\d{1,3}){3} - "                         # access-log line
+    r"|[A-Z]+:\s)")                                        # uvicorn "INFO:   ..."
+
+
+def redact(line):
+    """Return (line_without_query_text, was_redacted)."""
+    m = _FOR_QUERY.search(line)
+    if m:
+        return line[:m.end()] + REDACTED, True
+    m = _QUERY_QUOTE.search(line)
+    if m:
+        cut = line.rfind("' (budget=")
+        suffix = line[cut:] if cut >= m.end() and _BUDGET_SUFFIX.match(line[cut:]) else "'"
+        return line[:m.end()] + REDACTED + suffix, True
+    return line, False
 
 
 def run(stream, out, max_bytes, backups, drops, echo=None):
@@ -25,8 +60,17 @@ def run(stream, out, max_bytes, backups, drops, echo=None):
     log.setLevel(logging.INFO)
     log.propagate = False
     try:
+        in_query = False  # True while the lines of a multi-line query continue
         for raw in stream:
             line = raw.rstrip("\n")
+            # 0) privacy: remove query text before the line goes anywhere
+            line, hit = redact(line)
+            if hit:
+                in_query = True
+            elif in_query:
+                if not _KNOWN_SHAPE.match(line):
+                    continue  # continuation of the redacted query text
+                in_query = False
             # 1) echo everything to stdout (Appliku live view, heartbeat included)
             echo.write(line + "\n")
             echo.flush()

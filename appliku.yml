@@ -55,6 +55,17 @@ build_settings:
       value: "hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension"
     - name: HINDSIGHT_API_TENANT_API_KEY
       source: manual
+    # Privacy (2026-11-19): the audit log must NOT record recall, because its request and
+    # response bodies hold the prompt text of plugin users (/public/recall needs no key). This
+    # allowlist names the actions that are recorded; recall is left out on purpose. Do not add
+    # it. reflect stays in: it needs the tenant API key, so only the owner can call it. An empty
+    # value means "record all actions", so do not empty it. HINDSIGHT_API_AUDIT_LOG_ENABLED stays a
+    # dashboard value. Check after each deploy: scripts/privacy_marker_test.sh must print PASS.
+    - name: HINDSIGHT_API_AUDIT_LOG_ACTIONS
+      value: "batch_retain,retain,delete_document,consolidation,graph_maintenance,refresh_mental_model,create_mental_model,delete_mental_model,retry_operation,cancel_operation,update_bank_config,create_bank,delete_bank,recover_consolidation,delete_directive,reflect"
+    # Audit rows older than 30 days are deleted by the maintenance sweep.
+    - name: HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS
+      value: "30"
     - name: HINDSIGHT_CP_DATAPLANE_API_URL
       value: "http://127.0.0.1:8889"
     - name: HINDSIGHT_CP_DATAPLANE_API_KEY
