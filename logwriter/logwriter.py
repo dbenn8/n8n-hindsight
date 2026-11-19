@@ -22,6 +22,10 @@ import sys
 # durable file, so redact() removes it from BOTH outputs. A query can hold line
 # breaks; the lines that follow a redacted line are dropped until the next line
 # with a known log shape.
+# A later line of a query can itself look like a log line ("ERROR: ..."). The
+# logged text always ends with "..." (plus tags or the budget suffix). So when
+# the first line does not hold that end, every following line is dropped until
+# the line that holds it (at most _OPEN_CAP lines: the text is 50 characters).
 REDACTED = "[redacted]"
 _FOR_QUERY = re.compile(r"\bfor query: ")
 _QUERY_QUOTE = re.compile(r"\] Query: '")
@@ -32,6 +36,56 @@ _KNOWN_SHAPE = re.compile(
     r"|  \["                                               # "  [1] ..." phase lines
     r"|\d{1,3}(?:\.\d{1,3}){3} - "                         # access-log line
     r"|[A-Z]+:\s)")                                        # uvicorn "INFO:   ..."
+
+
+_FOR_QUERY_END = re.compile(r"\.\.\.(?:, tags=.*| \(.*\))?$")
+_OPEN_CAP = 51
+
+
+def query_open(line):
+    """True when a query line does not hold the end of the logged query text."""
+    m = _FOR_QUERY.search(line)
+    if m:
+        rest = line[m.end():]
+        return not rest.startswith(REDACTED) and not _FOR_QUERY_END.search(rest)
+    m = _QUERY_QUOTE.search(line)
+    if m:
+        rest = line[m.end():]
+        return not rest.startswith(REDACTED) and not _BUDGET_SUFFIX.search(rest)
+    return False
+
+
+def query_end(line):
+    """True when a continuation line holds the end of the logged query text."""
+    return bool(_FOR_QUERY_END.search(line) or _BUDGET_SUFFIX.search(line))
+
+
+def scrub(lines, stats=None):
+    """Yield the lines without query text. `lines` have no trailing newline."""
+    in_query = False  # True while the lines of a multi-line query continue
+    open_left = 0     # >0: drop every line until the end of the query text
+    for line in lines:
+        opened = query_open(line)
+        new, hit = redact(line)
+        if hit:
+            if stats is not None and new != line:
+                stats["masked"] += 1
+            in_query = True
+            open_left = _OPEN_CAP if opened else 0
+            yield new
+            continue
+        if open_left:
+            open_left = 0 if query_end(line) else open_left - 1
+            if stats is not None:
+                stats["dropped"] += 1
+            continue
+        if in_query:
+            if not _KNOWN_SHAPE.match(line):
+                if stats is not None:
+                    stats["dropped"] += 1
+                continue  # continuation of the redacted query text
+            in_query = False
+        yield line
 
 
 def redact(line):
@@ -60,17 +114,8 @@ def run(stream, out, max_bytes, backups, drops, echo=None):
     log.setLevel(logging.INFO)
     log.propagate = False
     try:
-        in_query = False  # True while the lines of a multi-line query continue
-        for raw in stream:
-            line = raw.rstrip("\n")
-            # 0) privacy: remove query text before the line goes anywhere
-            line, hit = redact(line)
-            if hit:
-                in_query = True
-            elif in_query:
-                if not _KNOWN_SHAPE.match(line):
-                    continue  # continuation of the redacted query text
-                in_query = False
+        # 0) privacy: scrub() removes query text before a line goes anywhere
+        for line in scrub(raw.rstrip("\n") for raw in stream):
             # 1) echo everything to stdout (Appliku live view, heartbeat included)
             echo.write(line + "\n")
             echo.flush()

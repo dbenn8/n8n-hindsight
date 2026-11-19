@@ -58,6 +58,7 @@ RUN chmod +x /usr/local/bin/start-nginx.sh /usr/local/bin/start.sh \
 
 # Durable volume logging: writer + supervisord wrapper, log dir on /data.
 COPY logwriter/logwriter.py /opt/logwriter.py
+COPY logwriter/redact_files.py /opt/redact_files.py
 COPY logpipe.sh /usr/local/bin/logpipe.sh
 RUN chmod +x /usr/local/bin/logpipe.sh && mkdir -p /data/logs && chown -R hindsight:hindsight /data/logs
 

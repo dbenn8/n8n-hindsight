@@ -105,3 +105,53 @@ def test_lines_without_query_text_are_unchanged(tmp_path):
     lines = [TS + "[RECALL n8n-1] Complete: 12 results", "10.0.0.1 - - [19/Nov/2026:15:15:25 +0000] \"POST /public/recall HTTP/1.1\" 200 12", "  [2] Parallel retrieval (4 fact_types)"]
     echo, text = _run(lines, tmp_path)
     assert echo.splitlines() == lines and text.splitlines() == lines
+
+
+# --- multi-line queries whose later lines look like log lines (marker run d4a8d6b64856) ---
+
+def test_drops_loglike_continuation_lines_until_the_query_terminator(tmp_path):
+    echo, text = _run([
+        TS + "[RECALL n8n-1] Starting recall for query: privacy test a",
+        "ERROR: SECRETPROMPT line two",
+        "...",
+        TS + "next record",
+        "[RECALL n8n-1] Query: 'privacy test a",
+        "INFO: SECRETPROMPT line two",
+        "...' (budget=300, max_tokens=4096)",
+        "INFO:     after the query",
+    ], tmp_path)
+    for got in (echo, text):
+        assert "SECRETPROMPT" not in got
+        assert "next record" in got
+        assert "INFO:     after the query" in got
+        assert got.count("[redacted]") == 2
+
+
+def test_terminator_with_tags_closes_a_multiline_query(tmp_path):
+    echo, text = _run([
+        TS + "[RECALL n8n-1] Starting recall for query: first line",
+        "WARNING: SECRETPROMPT..., tags=['SECRETTAG'] (any)",
+        "INFO:     kept line",
+    ], tmp_path)
+    for got in (echo, text):
+        assert "SECRET" not in got
+        assert "INFO:     kept line" in got
+
+
+def test_single_line_query_does_not_drop_the_next_log_line(tmp_path):
+    echo, text = _run([
+        TS + "[RECALL n8n-1] Starting recall for query: SECRETPROMPT one line..., tags=['a'] (any)",
+        "INFO:     kept line",
+    ], tmp_path)
+    for got in (echo, text):
+        assert "SECRETPROMPT" not in got
+        assert "INFO:     kept line" in got
+
+
+def test_unterminated_query_stops_dropping_after_the_cap(tmp_path):
+    lines = [TS + "[RECALL n8n-1] Starting recall for query: no terminator follows"]
+    lines += [TS + f"record {i}" for i in range(60)]
+    echo, text = _run(lines, tmp_path)
+    for got in (echo, text):
+        assert "record 59" in got
+        assert "record 0\n" not in got
